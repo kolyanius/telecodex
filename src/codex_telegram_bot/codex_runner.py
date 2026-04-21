@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import shlex
@@ -24,6 +25,8 @@ from .models import (
 logger = structlog.get_logger(__name__)
 
 StreamCallback = Callable[[CodexStreamEvent], Awaitable[None]]
+STDOUT_READ_CHUNK_SIZE = 16 * 1024
+MAX_JSONL_EVENT_BYTES = 1024 * 1024
 
 RECOVERABLE_RESUME_PATTERNS = (
     "no conversation found",
@@ -132,7 +135,7 @@ class CodexRunner:
                 )
             for image_path in image_paths:
                 cmd.extend(["--image", str(image_path)])
-        cmd.append(prompt)
+        cmd.append("-")
 
         env = os.environ.copy()
         env["PWD"] = str(cwd)
@@ -143,6 +146,7 @@ class CodexRunner:
                 *cmd,
                 cwd=str(cwd),
                 env=env,
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -176,43 +180,9 @@ class CodexRunner:
         timeout_task = asyncio.create_task(self._watch_timeout(process=process, state=state))
 
         try:
+            await self._write_prompt(process=process, prompt=prompt)
             assert process.stdout is not None
-            while True:
-                line = await process.stdout.readline()
-                if not line:
-                    break
-
-                line_str = line.decode("utf-8", errors="replace").strip()
-                if not line_str:
-                    continue
-
-                try:
-                    event = json.loads(line_str)
-                except json.JSONDecodeError:
-                    state.invalid_json_lines += 1
-                    logger.warning("codex_invalid_json_event", line=line_str[:300])
-                    continue
-
-                state.raw_events.append(event)
-                normalized = self._normalize_event(event)
-                if normalized is not None:
-                    if normalized.kind == CodexStreamEventKind.TEXT_DELTA and normalized.text_delta:
-                        state.streamed_text_parts.append(normalized.text_delta)
-                    elif normalized.kind == CodexStreamEventKind.TEXT_SNAPSHOT and normalized.text_snapshot:
-                        state.final_snapshot_text = normalized.text_snapshot
-                    elif normalized.kind == CodexStreamEventKind.USAGE:
-                        state.input_tokens = int(normalized.usage.get("input_tokens", 0))
-                        state.cached_input_tokens = int(
-                            normalized.usage.get("cached_input_tokens", 0)
-                        )
-                        state.output_tokens = int(normalized.usage.get("output_tokens", 0))
-                    elif normalized.lifecycle_name == "thread.started":
-                        state.thread_id = event.get("thread_id", state.thread_id)
-
-                    if on_event:
-                        maybe_awaitable = on_event(normalized)
-                        if asyncio.iscoroutine(maybe_awaitable):
-                            await maybe_awaitable
+            await self._consume_stdout(process=process, state=state, on_event=on_event)
 
             stderr = ""
             if process.stderr is not None:
@@ -249,6 +219,19 @@ class CodexRunner:
                 error_message=(
                     f"Codex timed out after {self.settings.codex_timeout_seconds} seconds."
                 ),
+            )
+
+        if state.protocol_error_message:
+            return self._build_response(
+                status=CodexResultStatus.PROTOCOL_ERROR,
+                start_time=start_time,
+                thread_id=state.thread_id,
+                final_text=state.resolved_final_text,
+                input_tokens=state.input_tokens,
+                cached_input_tokens=state.cached_input_tokens,
+                output_tokens=state.output_tokens,
+                raw_events=state.raw_events,
+                error_message=state.protocol_error_message,
             )
 
         if rc != 0:
@@ -289,6 +272,102 @@ class CodexRunner:
             output_tokens=state.output_tokens,
             raw_events=state.raw_events,
         )
+
+    async def _write_prompt(
+        self,
+        *,
+        process: asyncio.subprocess.Process,
+        prompt: str,
+    ) -> None:
+        if process.stdin is None:
+            return
+
+        try:
+            process.stdin.write(prompt.encode("utf-8"))
+            await process.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        finally:
+            process.stdin.close()
+            wait_closed = getattr(process.stdin, "wait_closed", None)
+            if callable(wait_closed):
+                with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+                    await wait_closed()
+
+    async def _consume_stdout(
+        self,
+        *,
+        process: asyncio.subprocess.Process,
+        state: "_RunState",
+        on_event: Optional[StreamCallback],
+    ) -> None:
+        assert process.stdout is not None
+        buffer = bytearray()
+
+        while True:
+            chunk = await process.stdout.read(STDOUT_READ_CHUNK_SIZE)
+            if not chunk:
+                break
+            buffer.extend(chunk)
+
+            while True:
+                newline_index = buffer.find(b"\n")
+                if newline_index < 0:
+                    break
+                raw_line = bytes(buffer[:newline_index])
+                del buffer[: newline_index + 1]
+                await self._process_jsonl_line(raw_line=raw_line, state=state, on_event=on_event)
+
+            if len(buffer) > MAX_JSONL_EVENT_BYTES:
+                state.protocol_error_message = (
+                    "Codex emitted a JSONL event larger than the supported buffer "
+                    f"({MAX_JSONL_EVENT_BYTES} bytes) without a newline separator."
+                )
+                if process.returncode is None:
+                    process.kill()
+                return
+
+        if buffer:
+            await self._process_jsonl_line(raw_line=bytes(buffer), state=state, on_event=on_event)
+
+    async def _process_jsonl_line(
+        self,
+        *,
+        raw_line: bytes,
+        state: "_RunState",
+        on_event: Optional[StreamCallback],
+    ) -> None:
+        line_str = raw_line.decode("utf-8", errors="replace").strip()
+        if not line_str:
+            return
+
+        try:
+            event = json.loads(line_str)
+        except json.JSONDecodeError:
+            state.invalid_json_lines += 1
+            logger.warning("codex_invalid_json_event", line=line_str[:300])
+            return
+
+        state.raw_events.append(event)
+        normalized = self._normalize_event(event)
+        if normalized is None:
+            return
+
+        if normalized.kind == CodexStreamEventKind.TEXT_DELTA and normalized.text_delta:
+            state.streamed_text_parts.append(normalized.text_delta)
+        elif normalized.kind == CodexStreamEventKind.TEXT_SNAPSHOT and normalized.text_snapshot:
+            state.final_snapshot_text = normalized.text_snapshot
+        elif normalized.kind == CodexStreamEventKind.USAGE:
+            state.input_tokens = int(normalized.usage.get("input_tokens", 0))
+            state.cached_input_tokens = int(normalized.usage.get("cached_input_tokens", 0))
+            state.output_tokens = int(normalized.usage.get("output_tokens", 0))
+        elif normalized.lifecycle_name == "thread.started":
+            state.thread_id = event.get("thread_id", state.thread_id)
+
+        if on_event:
+            maybe_awaitable = on_event(normalized)
+            if asyncio.iscoroutine(maybe_awaitable):
+                await maybe_awaitable
 
     async def _watch_interrupt(
         self,
@@ -433,6 +512,7 @@ class _RunState:
         self.invalid_json_lines = 0
         self.interrupted = False
         self.timed_out = False
+        self.protocol_error_message = ""
 
     @property
     def resolved_final_text(self) -> str:
