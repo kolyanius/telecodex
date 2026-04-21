@@ -34,6 +34,29 @@ class CodexLaunchMode(StringEnum):
         return cls.SANDBOX
 
 
+class ReasoningEffort(StringEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    XHIGH = "xhigh"
+
+    @classmethod
+    def from_value(cls, value: Any, default: "ReasoningEffort" | None = None) -> "ReasoningEffort":
+        if isinstance(value, cls):
+            return value
+        normalized = str(value or "").strip().lower()
+        for member in cls:
+            if normalized == member.value:
+                return member
+        return default or cls.MEDIUM
+
+    @property
+    def display_label(self) -> str:
+        if self == ReasoningEffort.XHIGH:
+            return "X-High"
+        return self.value.capitalize()
+
+
 class CodexStreamEventKind(StringEnum):
     TEXT_DELTA = "text_delta"
     TEXT_SNAPSHOT = "text_snapshot"
@@ -84,6 +107,24 @@ class ProjectSession:
     updated_at: str
     last_status: str = ""
     last_error: str = ""
+    model_id: str = ""
+    reasoning_effort: str = ""
+
+
+@dataclass
+class UserPreferences:
+    user_id: int
+    model_id: str
+    reasoning_effort: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class ResolvedLlmPreferences:
+    model_id: str
+    model_label: str
+    reasoning_effort: ReasoningEffort
+    allowed_reasoning_efforts: tuple[ReasoningEffort, ...] = ()
 
 
 @dataclass
@@ -110,6 +151,8 @@ class RequestContext:
     image_count: int = 0
     voice_duration_seconds: int = 0
     launch_mode: str = ""
+    model_id: str = ""
+    reasoning_effort: str = ""
 
 
 @dataclass

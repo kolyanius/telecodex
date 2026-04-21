@@ -18,6 +18,8 @@ from ..models import (
     CodexResultStatus,
     CodexStreamEvent,
     PreparedCodexRequest,
+    ReasoningEffort,
+    ResolvedLlmPreferences,
 )
 from ..rate_limiter import RateLimiter
 from ..services.observability import ObservabilityService
@@ -25,8 +27,11 @@ from ..services.projects import ProjectService
 from ..session_store import SessionStore
 from ..telegram.ui.keyboards import (
     build_full_access_warning_keyboard,
+    build_llm_keyboard,
+    build_model_keyboard,
     build_mode_editor_keyboard,
     build_no_project_keyboard,
+    build_reasoning_keyboard,
     build_stop_keyboard,
 )
 from ..telegram.ui.responder import TelegramResponder
@@ -34,9 +39,12 @@ from ..telegram.ui.texts import (
     build_progress_text,
     render_final_text,
     render_full_access_warning_text,
+    render_llm_editor_text,
     render_launch_mode_editor_text,
     render_launch_mode_label,
+    render_model_picker_text,
     render_no_projects_text,
+    render_reasoning_picker_text,
 )
 
 
@@ -71,6 +79,20 @@ class PromptExecutionFlow:
             "Следующие запросы в этом проекте будут использовать его."
         )
 
+    @staticmethod
+    def _llm_changed_notice(model_label: str, reasoning_label: str) -> str:
+        return (
+            f"LLM обновлён: `{model_label}` / `{reasoning_label}`. "
+            "Изменения применятся к следующим запросам."
+        )
+
+    @staticmethod
+    def _llm_resume_reset_notice() -> str:
+        return (
+            "Если в проекте есть старая сессия с другими LLM-параметрами, "
+            "следующий запрос начнёт новую Codex-сессию вместо resume."
+        )
+
     async def resolve_launch_mode(
         self,
         *,
@@ -83,6 +105,236 @@ class PromptExecutionFlow:
         if stored is not None:
             return stored
         return CodexLaunchMode.from_value(self.settings.codex_default_launch_mode)
+
+    async def resolve_llm_preferences(self, *, user_id: int) -> ResolvedLlmPreferences:
+        stored = await self.session_store.get_user_preferences(user_id)
+        resolved_model_id = stored.model_id if stored else self.settings.codex_model or ""
+        option = self.settings.get_model_option(resolved_model_id)
+        if option is None:
+            option = self.settings.get_model_option(self.settings.codex_model or "")
+        assert option is not None
+
+        allowed_efforts = tuple(option.reasoning_efforts)
+        resolved_effort = ReasoningEffort.from_value(
+            stored.reasoning_effort if stored else self.settings.codex_default_reasoning_effort,
+            default=self.settings.codex_default_reasoning_effort,
+        )
+        if resolved_effort not in allowed_efforts:
+            if self.settings.codex_default_reasoning_effort in allowed_efforts:
+                resolved_effort = self.settings.codex_default_reasoning_effort
+            else:
+                resolved_effort = allowed_efforts[0]
+
+        if (
+            stored is None
+            or stored.model_id != option.id
+            or stored.reasoning_effort != resolved_effort.value
+        ):
+            await self.session_store.upsert_user_preferences(
+                user_id,
+                option.id,
+                resolved_effort.value,
+            )
+
+        return ResolvedLlmPreferences(
+            model_id=option.id,
+            model_label=option.label,
+            reasoning_effort=resolved_effort,
+            allowed_reasoning_efforts=allowed_efforts,
+        )
+
+    async def show_llm_editor(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        *,
+        edit: bool,
+        notice: str = "",
+    ) -> None:
+        request_context = self.observability.make_request_context(update, context, source="command")
+        project = await self.projects.resolve_current_project(
+            context,
+            request_context=request_context,
+            create_if_empty=False,
+        )
+        llm = await self.resolve_llm_preferences(user_id=update.effective_user.id)
+        text = render_llm_editor_text(
+            project_name=project.path.name if project.path else None,
+            model_label=llm.model_label,
+            reasoning_label=llm.reasoning_effort.display_label,
+            has_active_run=update.effective_user.id in self.active_interrupts,
+            notice=notice,
+        )
+        if edit:
+            await self.responder.edit_callback_message(
+                update,
+                text,
+                reply_markup=build_llm_keyboard(),
+                parse_mode="Markdown",
+            )
+            return
+        await update.effective_message.reply_text(
+            text,
+            reply_markup=build_llm_keyboard(),
+            parse_mode="Markdown",
+        )
+
+    async def show_model_picker(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        *,
+        edit: bool,
+        notice: str = "",
+    ) -> None:
+        request_context = self.observability.make_request_context(update, context, source="command")
+        project = await self.projects.resolve_current_project(
+            context,
+            request_context=request_context,
+            create_if_empty=False,
+        )
+        llm = await self.resolve_llm_preferences(user_id=update.effective_user.id)
+        labels = [option.label for option in self.settings.codex_model_options]
+        current_index = next(
+            (
+                index
+                for index, option in enumerate(self.settings.codex_model_options)
+                if option.id == llm.model_id
+            ),
+            0,
+        )
+        text = render_model_picker_text(
+            project_name=project.path.name if project.path else None,
+            current_model_label=llm.model_label,
+            current_reasoning_label=llm.reasoning_effort.display_label,
+            notice=notice,
+        )
+        markup = build_model_keyboard(labels, current_index=current_index)
+        if edit:
+            await self.responder.edit_callback_message(
+                update,
+                text,
+                reply_markup=markup,
+                parse_mode="Markdown",
+            )
+            return
+        await update.effective_message.reply_text(text, reply_markup=markup, parse_mode="Markdown")
+
+    async def show_reasoning_picker(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        *,
+        edit: bool,
+        notice: str = "",
+    ) -> None:
+        request_context = self.observability.make_request_context(update, context, source="command")
+        project = await self.projects.resolve_current_project(
+            context,
+            request_context=request_context,
+            create_if_empty=False,
+        )
+        llm = await self.resolve_llm_preferences(user_id=update.effective_user.id)
+        text = render_reasoning_picker_text(
+            project_name=project.path.name if project.path else None,
+            model_label=llm.model_label,
+            current_reasoning_label=llm.reasoning_effort.display_label,
+            notice=notice,
+        )
+        markup = build_reasoning_keyboard(
+            list(llm.allowed_reasoning_efforts),
+            current_effort=llm.reasoning_effort,
+        )
+        if edit:
+            await self.responder.edit_callback_message(
+                update,
+                text,
+                reply_markup=markup,
+                parse_mode="Markdown",
+            )
+            return
+        await update.effective_message.reply_text(text, reply_markup=markup, parse_mode="Markdown")
+
+    async def set_model(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        model_index: int,
+    ) -> None:
+        request_context = self.observability.make_request_context(update, context, source="command")
+        if model_index < 0 or model_index >= len(self.settings.codex_model_options):
+            await self.show_model_picker(
+                update,
+                context,
+                edit=True,
+                notice="Выбранная модель больше недоступна.",
+            )
+            return
+        option = self.settings.codex_model_options[model_index]
+        current = await self.resolve_llm_preferences(user_id=update.effective_user.id)
+        new_effort = current.reasoning_effort
+        if new_effort not in option.reasoning_efforts:
+            if self.settings.codex_default_reasoning_effort in option.reasoning_efforts:
+                new_effort = self.settings.codex_default_reasoning_effort
+            else:
+                new_effort = option.reasoning_efforts[0]
+        await self.session_store.upsert_user_preferences(
+            update.effective_user.id,
+            option.id,
+            new_effort.value,
+        )
+        await self.observability.record_event(
+            "telegram_model_selected",
+            request_context,
+            audit_event="telegram_model_selected",
+            previous_model_id=current.model_id,
+            new_model_id=option.id,
+            reasoning_effort=new_effort.value,
+        )
+        notice = self._llm_changed_notice(option.label, new_effort.display_label)
+        await self.show_llm_editor(
+            update,
+            context,
+            edit=True,
+            notice=f"{notice}\n{self._llm_resume_reset_notice()}",
+        )
+
+    async def set_reasoning_effort(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        reasoning_effort: ReasoningEffort,
+    ) -> None:
+        request_context = self.observability.make_request_context(update, context, source="command")
+        current = await self.resolve_llm_preferences(user_id=update.effective_user.id)
+        if reasoning_effort not in current.allowed_reasoning_efforts:
+            await self.show_reasoning_picker(
+                update,
+                context,
+                edit=True,
+                notice="Этот уровень reasoning недоступен для текущей модели.",
+            )
+            return
+        await self.session_store.upsert_user_preferences(
+            update.effective_user.id,
+            current.model_id,
+            reasoning_effort.value,
+        )
+        await self.observability.record_event(
+            "telegram_reasoning_selected",
+            request_context,
+            audit_event="telegram_reasoning_selected",
+            model_id=current.model_id,
+            previous_reasoning_effort=current.reasoning_effort.value,
+            new_reasoning_effort=reasoning_effort.value,
+        )
+        notice = self._llm_changed_notice(current.model_label, reasoning_effort.display_label)
+        await self.show_llm_editor(
+            update,
+            context,
+            edit=True,
+            notice=f"{notice}\n{self._llm_resume_reset_notice()}",
+        )
 
     async def show_mode_editor(
         self,
@@ -222,15 +474,38 @@ class PromptExecutionFlow:
 
         cwd = project.path
         launch_mode = await self.resolve_launch_mode(user_id=user_id, project_path=cwd)
+        llm = await self.resolve_llm_preferences(user_id=user_id)
         request_context.cwd = str(cwd)
         request_context.launch_mode = launch_mode.value
+        request_context.model_id = llm.model_id
+        request_context.reasoning_effort = llm.reasoning_effort.value
         if project.auto_created:
             await update.effective_message.reply_text(
                 f"Создал и выбрал первый проект: `{cwd.name}`.",
                 parse_mode="Markdown",
             )
 
-        previous_thread_id = await self.session_store.get_thread_id(user_id, str(cwd))
+        session = await self.session_store.get_session(user_id, str(cwd))
+        previous_thread_id = None
+        if (
+            session is not None
+            and session.thread_id
+            and session.model_id
+            and session.reasoning_effort
+            and session.model_id == llm.model_id
+            and session.reasoning_effort == llm.reasoning_effort.value
+        ):
+            previous_thread_id = session.thread_id
+        elif session is not None and session.thread_id:
+            await self.observability.record_event(
+                "codex_resume_skipped_llm_mismatch",
+                request_context,
+                previous_thread_id=session.thread_id,
+                previous_model_id=session.model_id,
+                previous_reasoning_effort=session.reasoning_effort,
+                current_model_id=llm.model_id,
+                current_reasoning_effort=llm.reasoning_effort.value,
+            )
         request_context.has_previous_thread = bool(previous_thread_id)
 
         await self.observability.record_event(
@@ -341,6 +616,8 @@ class PromptExecutionFlow:
                 prompt=prepared_request.prompt,
                 cwd=cwd,
                 launch_mode=launch_mode,
+                model_id=llm.model_id,
+                reasoning_effort=llm.reasoning_effort,
                 previous_thread_id=previous_thread_id,
                 on_event=on_event,
                 interrupt_event=interrupt_event,
@@ -408,6 +685,8 @@ class PromptExecutionFlow:
             user_id=user_id,
             project_path=str(cwd),
             previous_thread_id=previous_thread_id,
+            model_id=llm.model_id,
+            reasoning_effort=llm.reasoning_effort,
             response=response,
         )
 
@@ -465,6 +744,8 @@ class PromptExecutionFlow:
         user_id: int,
         project_path: str,
         previous_thread_id: Optional[str],
+        model_id: str,
+        reasoning_effort: ReasoningEffort,
         response: CodexResponse,
     ) -> None:
         if response.thread_id:
@@ -474,6 +755,8 @@ class PromptExecutionFlow:
                 response.thread_id,
                 last_status=str(response.status),
                 last_error=response.error_message,
+                model_id=model_id,
+                reasoning_effort=reasoning_effort.value,
             )
             return
         if previous_thread_id:

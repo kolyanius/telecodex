@@ -5,7 +5,7 @@ from telegram.ext import ContextTypes
 
 from ..flows.execution import PromptExecutionFlow
 from ..flows.navigation import NavigationFlow
-from ..models import CodexLaunchMode
+from ..models import CodexLaunchMode, ReasoningEffort
 from ..services.observability import ObservabilityService
 from ..telegram.ui.keyboards import build_no_project_keyboard
 from ..telegram.ui.texts import render_no_projects_text
@@ -109,6 +109,26 @@ class CallbackHandlers:
             await self.execution.show_mode_editor(update, context, edit=True)
             return
 
+        if data == "llm:show":
+            await self.observability.record_event(
+                "telegram_llm_opened",
+                request_context,
+                audit_event="telegram_llm_opened",
+            )
+            await query.answer("LLM")
+            await self.execution.show_llm_editor(update, context, edit=True)
+            return
+
+        if data == "llm:model:show":
+            await query.answer("Model")
+            await self.execution.show_model_picker(update, context, edit=True)
+            return
+
+        if data == "llm:reasoning:show":
+            await query.answer("Reasoning")
+            await self.execution.show_reasoning_picker(update, context, edit=True)
+            return
+
         if data == "mode:set:sandbox":
             await query.answer("Sandbox")
             await self.execution.set_launch_mode(update, context, CodexLaunchMode.SANDBOX)
@@ -136,6 +156,18 @@ class CallbackHandlers:
             level = int(data.rsplit(":", 1)[1])
             await query.answer(f"Verbose {level}")
             await self.navigation.set_verbose(update, context, request_context, level)
+            return
+
+        if data.startswith("llm:model:set:"):
+            model_index = int(data.rsplit(":", 1)[1])
+            await query.answer("Model updated")
+            await self.execution.set_model(update, context, model_index)
+            return
+
+        if data.startswith("llm:reasoning:set:"):
+            reasoning_effort = ReasoningEffort.from_value(data.rsplit(":", 1)[1])
+            await query.answer(reasoning_effort.display_label)
+            await self.execution.set_reasoning_effort(update, context, reasoning_effort)
             return
 
         if data.startswith("repo:select:"):

@@ -4,10 +4,43 @@ import json
 from pathlib import Path
 from typing import Annotated, Optional
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-from .models import CodexLaunchMode
+from .models import CodexLaunchMode, ReasoningEffort
+
+
+class ModelOption(BaseModel):
+    id: str
+    label: str
+    reasoning_efforts: list[ReasoningEffort]
+
+    @field_validator("id", "label")
+    @classmethod
+    def validate_non_empty_strings(cls, value: str) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("Model option id/label must not be empty")
+        return normalized
+
+    @field_validator("reasoning_efforts", mode="before")
+    @classmethod
+    def parse_reasoning_efforts(cls, value):
+        if isinstance(value, str):
+            normalized = value.strip()
+            if normalized.startswith("["):
+                value = json.loads(normalized)
+            else:
+                value = [item.strip() for item in normalized.split(",") if item.strip()]
+        return value
+
+    @field_validator("reasoning_efforts")
+    @classmethod
+    def validate_reasoning_efforts(cls, value: list[ReasoningEffort]) -> list[ReasoningEffort]:
+        if not value:
+            raise ValueError("Model option must define at least one reasoning effort")
+        deduplicated = list(dict.fromkeys(value))
+        return deduplicated
 
 
 class Settings(BaseSettings):
@@ -21,6 +54,8 @@ class Settings(BaseSettings):
 
     codex_cli_path: str = "codex"
     codex_model: Optional[str] = "gpt-5.3-codex"
+    codex_default_reasoning_effort: ReasoningEffort = ReasoningEffort.MEDIUM
+    codex_model_options: Annotated[list[ModelOption], NoDecode] = Field(default_factory=list)
     codex_full_auto: bool = True
     codex_auto_edit: bool = False
     codex_default_launch_mode: CodexLaunchMode = CodexLaunchMode.SANDBOX
@@ -70,6 +105,21 @@ class Settings(BaseSettings):
                     return [int(x) for x in parsed]
                 return [int(parsed)]
             return [int(x.strip()) for x in normalized.split(",") if x.strip()]
+        return value
+
+    @field_validator("codex_model_options", mode="before")
+    @classmethod
+    def parse_codex_model_options(cls, value):
+        if value is None or value == "":
+            return []
+        if isinstance(value, str):
+            normalized = value.strip()
+            if not normalized:
+                return []
+            parsed = json.loads(normalized)
+            if not isinstance(parsed, list):
+                raise ValueError("CODEX_MODEL_OPTIONS must be a JSON array")
+            return parsed
         return value
 
     @field_validator("approved_directory")
@@ -135,6 +185,37 @@ class Settings(BaseSettings):
         if value < 1:
             raise ValueError("MAX_ACTIVE_RUNS_PER_USER must be >= 1")
         return value
+
+    @model_validator(mode="after")
+    def validate_model_options(self):
+        if not self.codex_model:
+            raise ValueError("CODEX_MODEL must be configured")
+
+        if not self.codex_model_options:
+            self.codex_model_options = [
+                ModelOption(
+                    id=self.codex_model,
+                    label=self.codex_model,
+                    reasoning_efforts=[
+                        ReasoningEffort.LOW,
+                        ReasoningEffort.MEDIUM,
+                        ReasoningEffort.HIGH,
+                        ReasoningEffort.XHIGH,
+                    ],
+                )
+            ]
+
+        option_ids = {option.id for option in self.codex_model_options}
+        if self.codex_model not in option_ids:
+            raise ValueError("CODEX_MODEL must be present in CODEX_MODEL_OPTIONS")
+
+        default_option = self.get_model_option(self.codex_model)
+        assert default_option is not None
+        if self.codex_default_reasoning_effort not in default_option.reasoning_efforts:
+            raise ValueError(
+                "CODEX_DEFAULT_REASONING_EFFORT must be allowed for CODEX_MODEL"
+            )
+        return self
 
     @property
     def telegram_token_str(self) -> str:
@@ -204,3 +285,9 @@ class Settings(BaseSettings):
                     "VOICE_TRANSCRIPTION_MODEL must be configured when "
                     "VOICE_PROVIDER=openai_compatible"
                 )
+
+    def get_model_option(self, model_id: str) -> Optional[ModelOption]:
+        for option in self.codex_model_options:
+            if option.id == model_id:
+                return option
+        return None

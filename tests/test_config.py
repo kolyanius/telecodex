@@ -182,3 +182,59 @@ def test_settings_validate_default_launch_mode(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="CODEX_DEFAULT_LAUNCH_MODE"):
         make_settings(tmp_path, codex_default_launch_mode="unsafe")
+
+
+def test_settings_parse_codex_model_options(tmp_path: Path) -> None:
+    settings = make_settings(
+        tmp_path,
+        codex_model="gpt-5.4",
+        codex_default_reasoning_effort="high",
+        codex_model_options=(
+            '[{"id":"gpt-5.4","label":"GPT-5.4","reasoning_efforts":["low","medium","high","xhigh"]}]'
+        ),
+    )
+
+    assert len(settings.codex_model_options) == 1
+    assert settings.codex_model_options[0].label == "GPT-5.4"
+    assert [effort.value for effort in settings.codex_model_options[0].reasoning_efforts] == [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+    ]
+    assert settings.codex_default_reasoning_effort.value == "high"
+
+
+def test_settings_reject_invalid_codex_model_options(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="CODEX_MODEL_OPTIONS"):
+        make_settings(tmp_path, codex_model_options='{"id":"gpt-5.4"}')
+
+    with pytest.raises(ValueError):
+        make_settings(
+            tmp_path,
+            codex_model="gpt-5.4",
+            codex_model_options=(
+                '[{"id":"gpt-5.4","label":"GPT-5.4","reasoning_efforts":["minimal"]}]'
+            ),
+        )
+
+
+def test_settings_reject_default_model_or_reasoning_missing_from_options(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="CODEX_MODEL"):
+        make_settings(
+            tmp_path,
+            codex_model="gpt-5.4",
+            codex_model_options=(
+                '[{"id":"gpt-5.4-mini","label":"GPT-5.4 mini","reasoning_efforts":["low","medium"]}]'
+            ),
+        )
+
+    with pytest.raises(ValueError, match="CODEX_DEFAULT_REASONING_EFFORT"):
+        make_settings(
+            tmp_path,
+            codex_model="gpt-5.4",
+            codex_default_reasoning_effort="xhigh",
+            codex_model_options=(
+                '[{"id":"gpt-5.4","label":"GPT-5.4","reasoning_efforts":["low","medium"]}]'
+            ),
+        )

@@ -38,7 +38,7 @@ def test_build_session_keyboard_has_expected_actions() -> None:
 
     assert keyboard_callback_data(markup) == [
         ["nav:repo", "mode:show"],
-        ["action:new"],
+        ["llm:show", "action:new"],
     ]
 
 

@@ -63,8 +63,14 @@ class NavigationFlow:
         request_context,
     ) -> None:
         project = await self.projects.resolve_current_project(context, request_context=request_context)
+        llm = await self.execution.resolve_llm_preferences(user_id=update.effective_user.id)
         await update.effective_message.reply_text(
-            render_home_text(project.path, auto_created=project.auto_created),
+            render_home_text(
+                project.path,
+                auto_created=project.auto_created,
+                model_label=llm.model_label,
+                reasoning_label=llm.reasoning_effort.display_label,
+            ),
             reply_markup=build_no_project_keyboard() if project.path is None else None,
             parse_mode="Markdown",
         )
@@ -85,9 +91,12 @@ class NavigationFlow:
         else:
             session = await self.session_store.get_session(update.effective_user.id, str(project.path))
             launch_mode = await self._resolve_launch_mode(update.effective_user.id, project.path)
+            llm = await self.execution.resolve_llm_preferences(user_id=update.effective_user.id)
             text = render_session_text(
                 cwd=project.path,
                 launch_mode=launch_mode,
+                model_label=llm.model_label,
+                reasoning_label=llm.reasoning_effort.display_label,
                 has_session=session is not None,
                 has_active_run=update.effective_user.id in self.execution.active_interrupts,
                 auto_created=project.auto_created,
@@ -116,12 +125,15 @@ class NavigationFlow:
     ) -> None:
         project = await self.projects.resolve_current_project(context, request_context=request_context)
         launch_mode = await self._resolve_launch_mode(update.effective_user.id, project.path)
+        llm = await self.execution.resolve_llm_preferences(user_id=update.effective_user.id)
         await self.responder.edit_callback_message(
             update,
             render_start_chat_text(
                 project.path,
                 auto_created=project.auto_created,
                 launch_mode=launch_mode,
+                model_label=llm.model_label,
+                reasoning_label=llm.reasoning_effort.display_label,
             ),
             reply_markup=build_no_project_keyboard() if project.path is None else None,
             parse_mode="Markdown",
@@ -174,6 +186,7 @@ class NavigationFlow:
             if cwd is not None
             else None
         )
+        llm = await self.execution.resolve_llm_preferences(user_id=update.effective_user.id)
         verbose = int(context.user_data.get("verbose_level", self.settings.verbose_level))
         text = render_status_text(
             self.settings,
@@ -182,6 +195,8 @@ class NavigationFlow:
             verbose,
             auto_created=project.auto_created,
             launch_mode=launch_mode,
+            model_label=llm.model_label,
+            reasoning_label=llm.reasoning_effort.display_label,
         )
         reply_markup = build_no_project_keyboard() if cwd is None else None
         if edit:

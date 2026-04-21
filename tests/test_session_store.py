@@ -23,11 +23,15 @@ async def test_session_store_crud_and_audit(tmp_path: Path) -> None:
         "thread-1",
         last_status="success",
         last_error="",
+        model_id="gpt-5.4",
+        reasoning_effort="medium",
     )
     session = await store.get_session(100, "/workspace/project")
     assert session is not None
     assert session.thread_id == "thread-1"
     assert session.last_status == "success"
+    assert session.model_id == "gpt-5.4"
+    assert session.reasoning_effort == "medium"
 
     await store.update_session_result(
         100,
@@ -70,6 +74,28 @@ async def test_session_store_crud_and_audit(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_session_store_user_preferences_crud(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot.db"
+    store = SessionStore(db_path)
+    await store.initialize()
+
+    assert await store.get_user_preferences(100) is None
+
+    await store.upsert_user_preferences(100, "gpt-5.4", "medium")
+    prefs = await store.get_user_preferences(100)
+    assert prefs is not None
+    assert prefs.model_id == "gpt-5.4"
+    assert prefs.reasoning_effort == "medium"
+
+    await store.upsert_user_preferences(100, "gpt-5.4-mini", "high")
+    prefs = await store.get_user_preferences(100)
+    assert prefs is not None
+    assert prefs.model_id == "gpt-5.4-mini"
+    assert prefs.reasoning_effort == "high"
+    await store.close()
+
+
+@pytest.mark.asyncio
 async def test_session_store_migrates_legacy_schema(tmp_path: Path) -> None:
     db_path = tmp_path / "legacy.db"
     conn = sqlite3.connect(db_path)
@@ -97,6 +123,12 @@ async def test_session_store_migrates_legacy_schema(tmp_path: Path) -> None:
     assert migrated is not None
     assert migrated.last_status == "success"
     assert migrated.last_error == ""
+    assert migrated.model_id == ""
+    assert migrated.reasoning_effort == ""
     await store.set_project_launch_mode(1, "/legacy/project", CodexLaunchMode.SANDBOX)
     assert await store.get_project_launch_mode(1, "/legacy/project") == CodexLaunchMode.SANDBOX
+    await store.upsert_user_preferences(1, "gpt-5.4", "medium")
+    prefs = await store.get_user_preferences(1)
+    assert prefs is not None
+    assert prefs.model_id == "gpt-5.4"
     await store.close()

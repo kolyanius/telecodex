@@ -129,7 +129,7 @@ class CodexTelegramBot:
         app.add_handler(
             CallbackQueryHandler(
                 self.handle_ui_callback,
-                pattern=r"^(?:nav:|action:(?:new|create_project)$|verbose:|repo:|mode:)",
+                pattern=r"^(?:nav:|action:(?:new|create_project)$|verbose:|repo:|mode:|llm:)",
             )
         )
         app.add_handler(MessageHandler(filters.VOICE, self.handle_voice))

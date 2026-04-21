@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 import aiosqlite
 
-from .models import CodexLaunchMode, ProjectSession
+from .models import CodexLaunchMode, ProjectSession, UserPreferences
 
 
 class SessionStore:
@@ -45,6 +45,9 @@ class SessionStore:
         if current_version < 3:
             await self._migration_v3()
             await self._set_schema_version(3)
+        if current_version < 4:
+            await self._migration_v4()
+            await self._set_schema_version(4)
 
     async def _get_schema_version(self) -> int:
         conn = self._require_conn()
@@ -142,6 +145,34 @@ class SessionStore:
             """
         )
 
+    async def _migration_v4(self) -> None:
+        conn = self._require_conn()
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                user_id INTEGER PRIMARY KEY,
+                model_id TEXT NOT NULL,
+                reasoning_effort TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        await conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_user_preferences_updated_at
+            ON user_preferences(updated_at)
+            """
+        )
+        columns = await self._get_table_columns("project_sessions")
+        if "model_id" not in columns:
+            await conn.execute(
+                "ALTER TABLE project_sessions ADD COLUMN model_id TEXT NOT NULL DEFAULT ''"
+            )
+        if "reasoning_effort" not in columns:
+            await conn.execute(
+                "ALTER TABLE project_sessions ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT ''"
+            )
+
     async def _get_table_columns(self, table_name: str) -> set[str]:
         conn = self._require_conn()
         cursor = await conn.execute("PRAGMA table_info(%s)" % table_name)
@@ -156,22 +187,35 @@ class SessionStore:
         *,
         last_status: str = "",
         last_error: str = "",
+        model_id: str = "",
+        reasoning_effort: str = "",
     ) -> None:
         conn = self._require_conn()
         await conn.execute(
             """
             INSERT INTO project_sessions (
-                user_id, project_path, thread_id, updated_at, last_status, last_error
+                user_id, project_path, thread_id, updated_at, last_status, last_error,
+                model_id, reasoning_effort
             )
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?)
             ON CONFLICT(user_id, project_path)
             DO UPDATE SET
                 thread_id=excluded.thread_id,
                 updated_at=CURRENT_TIMESTAMP,
                 last_status=excluded.last_status,
-                last_error=excluded.last_error
+                last_error=excluded.last_error,
+                model_id=excluded.model_id,
+                reasoning_effort=excluded.reasoning_effort
             """,
-            (user_id, project_path, thread_id, last_status, last_error),
+            (
+                user_id,
+                project_path,
+                thread_id,
+                last_status,
+                last_error,
+                model_id,
+                reasoning_effort,
+            ),
         )
         await conn.commit()
 
@@ -183,7 +227,8 @@ class SessionStore:
         conn = self._require_conn()
         cursor = await conn.execute(
             """
-            SELECT user_id, project_path, thread_id, updated_at, last_status, last_error
+            SELECT user_id, project_path, thread_id, updated_at, last_status, last_error,
+                   model_id, reasoning_effort
             FROM project_sessions
             WHERE user_id = ? AND project_path = ?
             """,
@@ -199,6 +244,8 @@ class SessionStore:
             updated_at=str(row["updated_at"]),
             last_status=str(row["last_status"] or ""),
             last_error=str(row["last_error"] or ""),
+            model_id=str(row["model_id"] or ""),
+            reasoning_effort=str(row["reasoning_effort"] or ""),
         )
 
     async def update_session_result(
@@ -219,6 +266,47 @@ class SessionStore:
             (last_status, last_error, user_id, project_path),
         )
         await conn.commit()
+
+    async def upsert_user_preferences(
+        self,
+        user_id: int,
+        model_id: str,
+        reasoning_effort: str,
+    ) -> None:
+        conn = self._require_conn()
+        await conn.execute(
+            """
+            INSERT INTO user_preferences (user_id, model_id, reasoning_effort, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id)
+            DO UPDATE SET
+                model_id=excluded.model_id,
+                reasoning_effort=excluded.reasoning_effort,
+                updated_at=CURRENT_TIMESTAMP
+            """,
+            (user_id, model_id, reasoning_effort),
+        )
+        await conn.commit()
+
+    async def get_user_preferences(self, user_id: int) -> Optional[UserPreferences]:
+        conn = self._require_conn()
+        cursor = await conn.execute(
+            """
+            SELECT user_id, model_id, reasoning_effort, updated_at
+            FROM user_preferences
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        return UserPreferences(
+            user_id=int(row["user_id"]),
+            model_id=str(row["model_id"]),
+            reasoning_effort=str(row["reasoning_effort"]),
+            updated_at=str(row["updated_at"]),
+        )
 
     async def clear_session(self, user_id: int, project_path: str) -> None:
         conn = self._require_conn()

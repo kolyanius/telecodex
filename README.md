@@ -94,6 +94,8 @@ DATABASE_URL=sqlite:///./codex_telegram_bot.db
 
 CODEX_CLI_PATH=codex
 CODEX_MODEL=gpt-5.3-codex
+CODEX_DEFAULT_REASONING_EFFORT=medium
+CODEX_MODEL_OPTIONS=[{"id":"gpt-5.3-codex","label":"GPT-5.3-Codex","reasoning_efforts":["low","medium","high","xhigh"]},{"id":"gpt-5.4","label":"GPT-5.4","reasoning_efforts":["low","medium","high","xhigh"]}]
 CODEX_DEFAULT_LAUNCH_MODE=sandbox
 CODEX_SKIP_GIT_REPO_CHECK=true
 CODEX_TIMEOUT_SECONDS=900
@@ -231,7 +233,9 @@ LOG_LEVEL=INFO
 | Переменная | Что делает | Комментарий |
 | --- | --- | --- |
 | `CODEX_CLI_PATH` | путь или имя бинарника Codex CLI | по умолчанию `codex` |
-| `CODEX_MODEL` | модель для Codex CLI | по умолчанию `gpt-5.3-codex`; если очистить значение, флаг `--model` не передаётся |
+| `CODEX_MODEL` | модель по умолчанию для новых пользователей | должна присутствовать в `CODEX_MODEL_OPTIONS` |
+| `CODEX_DEFAULT_REASONING_EFFORT` | reasoning по умолчанию для новых пользователей | допустимы `low`, `medium`, `high`, `xhigh`; по умолчанию `medium` |
+| `CODEX_MODEL_OPTIONS` | whitelist моделей для Telegram UI | JSON-список объектов `{id,label,reasoning_efforts}` |
 | `CODEX_DEFAULT_LAUNCH_MODE` | режим по умолчанию для новых проектов | `sandbox` или `full_access` |
 | `CODEX_SKIP_GIT_REPO_CHECK` | добавляет `--skip-git-repo-check` | по умолчанию `true` |
 | `CODEX_TIMEOUT_SECONDS` | таймаут одного запуска Codex | должен быть больше `0` |
@@ -372,8 +376,9 @@ sudo journalctl -u codex-telegram-bot -f
 
 - логирование настроено через `structlog` и выводится в `JSON`
 - SQLite работает в режиме `WAL`
-- `project_sessions` хранит `thread_id`, `last_status`, `last_error` и время обновления
+- `project_sessions` хранит `thread_id`, `last_status`, `last_error`, `model_id`, `reasoning_effort` и время обновления
 - `project_preferences` хранит `launch_mode` отдельно для каждого пользователя и проекта
+- `user_preferences` хранит выбранные пользователем `model_id` и `reasoning_effort`
 - `audit_log` хранит журнал аудита, в который события только добавляются, если `ENABLE_AUDIT_LOG=true`
 
 ### 🏗️ Коротко об архитектуре

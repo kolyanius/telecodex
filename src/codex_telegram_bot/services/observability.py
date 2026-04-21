@@ -100,6 +100,10 @@ class ObservabilityService:
         }
         if request_context.launch_mode:
             fields["launch_mode"] = request_context.launch_mode
+        if request_context.model_id:
+            fields["model_id"] = request_context.model_id
+        if request_context.reasoning_effort:
+            fields["reasoning_effort"] = request_context.reasoning_effort
         if request_context.command_name:
             fields["command_name"] = request_context.command_name
         return fields

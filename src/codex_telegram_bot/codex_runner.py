@@ -17,6 +17,7 @@ from .models import (
     CodexLaunchMode,
     CodexResponse,
     CodexResultStatus,
+    ReasoningEffort,
     CodexStreamEvent,
     CodexStreamEventKind,
     CodexToolCall,
@@ -66,6 +67,8 @@ class CodexRunner:
         prompt: str,
         cwd: Path,
         launch_mode: CodexLaunchMode,
+        model_id: Optional[str] = None,
+        reasoning_effort: ReasoningEffort | str = ReasoningEffort.MEDIUM,
         previous_thread_id: Optional[str] = None,
         on_event: Optional[StreamCallback] = None,
         interrupt_event: Optional[asyncio.Event] = None,
@@ -78,6 +81,8 @@ class CodexRunner:
             prompt=prompt,
             cwd=cwd,
             launch_mode=launch_mode,
+            model_id=model_id,
+            reasoning_effort=reasoning_effort,
             previous_thread_id=previous_thread_id,
             on_event=on_event,
             interrupt_event=interrupt_event,
@@ -94,6 +99,8 @@ class CodexRunner:
                 prompt=prompt,
                 cwd=cwd,
                 launch_mode=launch_mode,
+                model_id=model_id,
+                reasoning_effort=reasoning_effort,
                 previous_thread_id=None,
                 on_event=on_event,
                 interrupt_event=interrupt_event,
@@ -109,6 +116,8 @@ class CodexRunner:
         prompt: str,
         cwd: Path,
         launch_mode: CodexLaunchMode,
+        model_id: Optional[str],
+        reasoning_effort: ReasoningEffort | str,
         previous_thread_id: Optional[str],
         on_event: Optional[StreamCallback],
         interrupt_event: Optional[asyncio.Event],
@@ -121,8 +130,11 @@ class CodexRunner:
             cmd.extend(["--sandbox", "read-only", "--config", 'web_search="disabled"'])
         else:
             cmd.append("--dangerously-bypass-approvals-and-sandbox")
-        if self.settings.codex_model:
-            cmd.extend(["--model", self.settings.codex_model])
+        resolved_model_id = model_id or self.settings.codex_model
+        if resolved_model_id:
+            cmd.extend(["--model", resolved_model_id])
+        resolved_effort = ReasoningEffort.from_value(reasoning_effort)
+        cmd.extend(["--config", f'model_reasoning_effort="{resolved_effort.value}"'])
         if previous_thread_id:
             cmd.extend(["resume", previous_thread_id])
         if image_paths:

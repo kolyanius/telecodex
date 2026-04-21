@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-from ...models import CodexLaunchMode
+from ...models import CodexLaunchMode, ReasoningEffort
 from ...services.projects import RepoOption
 
 
@@ -13,7 +13,10 @@ def build_session_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("📁 Проект", callback_data="nav:repo"),
                 InlineKeyboardButton("⚙️ Режим", callback_data="mode:show"),
             ],
-            [InlineKeyboardButton("🆕 Новая сессия", callback_data="action:new")],
+            [
+                InlineKeyboardButton("🤖 LLM", callback_data="llm:show"),
+                InlineKeyboardButton("🆕 Новая сессия", callback_data="action:new"),
+            ],
         ]
     )
 
@@ -94,3 +97,51 @@ def build_full_access_warning_keyboard(back_callback: str) -> InlineKeyboardMark
             [InlineKeyboardButton("⬅️ Назад", callback_data=back_callback)],
         ]
     )
+
+
+def build_llm_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("Model", callback_data="llm:model:show"),
+                InlineKeyboardButton("Reasoning", callback_data="llm:reasoning:show"),
+            ],
+            [InlineKeyboardButton("⬅️ В меню", callback_data="nav:menu")],
+        ]
+    )
+
+
+def build_model_keyboard(
+    labels: list[str],
+    *,
+    current_index: int,
+) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                f"• {label}" if index == current_index else label,
+                callback_data=f"llm:model:set:{index}",
+            )
+        ]
+        for index, label in enumerate(labels)
+    ]
+    rows.append([InlineKeyboardButton("⬅️ Назад", callback_data="llm:show")])
+    return InlineKeyboardMarkup(rows)
+
+
+def build_reasoning_keyboard(
+    efforts: list[ReasoningEffort],
+    *,
+    current_effort: ReasoningEffort,
+) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                f"• {effort.display_label}" if effort == current_effort else effort.display_label,
+                callback_data=f"llm:reasoning:set:{effort.value}",
+            )
+        ]
+        for effort in efforts
+    ]
+    rows.append([InlineKeyboardButton("⬅️ Назад", callback_data="llm:show")])
+    return InlineKeyboardMarkup(rows)

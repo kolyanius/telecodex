@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ...config import Settings
-from ...models import CodexLaunchMode, CodexResponse, CodexResultStatus
+from ...models import CodexLaunchMode, CodexResponse, CodexResultStatus, ReasoningEffort
 from ...services.projects import RepoOption
 
 
@@ -14,10 +14,24 @@ def render_launch_mode_label(launch_mode: CodexLaunchMode) -> str:
     return "Песочница"
 
 
-def render_home_text(cwd: Optional[Path], *, auto_created: bool = False) -> str:
+def render_reasoning_effort_label(reasoning_effort: ReasoningEffort | str) -> str:
+    return ReasoningEffort.from_value(reasoning_effort).display_label
+
+
+def render_home_text(
+    cwd: Optional[Path],
+    *,
+    auto_created: bool = False,
+    model_label: str = "",
+    reasoning_label: str = "",
+) -> str:
     if cwd is None:
+        llm_text = ""
+        if model_label and reasoning_label:
+            llm_text = f"Текущие LLM-настройки: `{model_label}` / `{reasoning_label}`\n\n"
         return (
             "Codex Telegram Bot для работы с кодом прямо из чата.\n\n"
+            f"{llm_text}"
             "Проект ещё не выбран.\n"
             "Открой `/menu` или используй `➕ Создать проект`, чтобы начать."
         )
@@ -25,8 +39,10 @@ def render_home_text(cwd: Optional[Path], *, auto_created: bool = False) -> str:
     return (
         "Codex Telegram Bot для работы с кодом прямо из чата.\n\n"
         f"{created_line}"
-        f"Текущий проект: `{cwd.name}`\n\n"
-        "Отправь задачу сообщением или открой `/menu`, чтобы сменить проект, режим доступа или начать новую сессию."
+        f"Текущий проект: `{cwd.name}`\n"
+        f"Model: `{model_label}`\n"
+        f"Reasoning: `{reasoning_label}`\n\n"
+        "Отправь задачу сообщением или открой `/menu`, чтобы сменить проект, режим доступа, LLM-настройки или начать новую сессию."
     )
 
 
@@ -35,6 +51,8 @@ def render_start_chat_text(
     *,
     auto_created: bool = False,
     launch_mode: CodexLaunchMode = CodexLaunchMode.SANDBOX,
+    model_label: str = "",
+    reasoning_label: str = "",
 ) -> str:
     if cwd is None:
         return (
@@ -46,8 +64,10 @@ def render_start_chat_text(
         f"{created_line}"
         f"Готов к работе в проекте `{cwd.name}`.\n\n"
         f"Режим доступа: `{render_launch_mode_label(launch_mode)}`.\n\n"
+        f"Model: `{model_label}`\n"
+        f"Reasoning: `{reasoning_label}`\n\n"
         "Отправь задачу сообщением.\n"
-        "Если нужно изменить проект или режим, открой `/menu`."
+        "Если нужно изменить проект, режим или LLM, открой `/menu`."
     )
 
 
@@ -59,6 +79,8 @@ def render_status_text(
     *,
     auto_created: bool = False,
     launch_mode: CodexLaunchMode = CodexLaunchMode.SANDBOX,
+    model_label: str = "",
+    reasoning_label: str = "",
 ) -> str:
     lines = []
     if auto_created and cwd is not None:
@@ -69,6 +91,8 @@ def render_status_text(
             f"Путь: `{cwd if cwd is not None else settings.approved_directory.resolve()}`",
             f"Thread ID: `{session.thread_id if session else 'none'}`",
             f"Режим доступа: `{render_launch_mode_label(launch_mode)}`",
+            f"Model: `{model_label}`",
+            f"Reasoning: `{reasoning_label}`",
             f"Verbose: `{verbose_level}`",
         ]
     )
@@ -85,6 +109,8 @@ def render_session_text(
     *,
     cwd: Path,
     launch_mode: CodexLaunchMode,
+    model_label: str,
+    reasoning_label: str,
     has_session: bool,
     has_active_run: bool,
     auto_created: bool = False,
@@ -103,6 +129,8 @@ def render_session_text(
             "",
             f"Проект: `{cwd.name}`",
             f"Режим доступа: `{render_launch_mode_label(launch_mode)}`",
+            f"Model: `{model_label}`",
+            f"Reasoning: `{reasoning_label}`",
             f"Сессия: `{'текущая' if has_session else 'новая'}`",
         ]
     )
@@ -213,3 +241,78 @@ def render_full_access_warning_text(*, project_name: str) -> str:
         "Полный доступ отключает sandbox для следующих запросов в этом проекте.\n"
         "Codex сможет выполнять команды и работать с файлами без ограничений песочницы."
     )
+
+
+def render_llm_editor_text(
+    *,
+    project_name: Optional[str],
+    model_label: str,
+    reasoning_label: str,
+    has_active_run: bool,
+    notice: str = "",
+) -> str:
+    lines = []
+    if notice:
+        lines.extend([notice, ""])
+    lines.extend(
+        [
+            "Настройка LLM.",
+            "",
+            f"Проект: `{project_name or 'не выбран'}`",
+            f"Model: `{model_label}`",
+            f"Reasoning: `{reasoning_label}`",
+            "",
+            "Эти настройки сохраняются для пользователя и применяются ко всем следующим запросам.",
+        ]
+    )
+    if has_active_run:
+        lines.append("Текущий запуск не изменится. Новые настройки применятся к следующему запросу.")
+    return "\n".join(lines)
+
+
+def render_model_picker_text(
+    *,
+    project_name: Optional[str],
+    current_model_label: str,
+    current_reasoning_label: str,
+    notice: str = "",
+) -> str:
+    lines = []
+    if notice:
+        lines.extend([notice, ""])
+    lines.extend(
+        [
+            "Выбор модели.",
+            "",
+            f"Проект: `{project_name or 'не выбран'}`",
+            f"Текущая model: `{current_model_label}`",
+            f"Текущий reasoning: `{current_reasoning_label}`",
+            "",
+            "Выбранная модель будет использоваться во всех следующих запросах.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def render_reasoning_picker_text(
+    *,
+    project_name: Optional[str],
+    model_label: str,
+    current_reasoning_label: str,
+    notice: str = "",
+) -> str:
+    lines = []
+    if notice:
+        lines.extend([notice, ""])
+    lines.extend(
+        [
+            "Выбор reasoning.",
+            "",
+            f"Проект: `{project_name or 'не выбран'}`",
+            f"Model: `{model_label}`",
+            f"Текущий reasoning: `{current_reasoning_label}`",
+            "",
+            "Выбранный reasoning будет использоваться во всех следующих запросах.",
+        ]
+    )
+    return "\n".join(lines)

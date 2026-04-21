@@ -367,10 +367,81 @@ async def test_menu_command_opens_session_card(tmp_path: Path) -> None:
     reply = update.effective_message.replies[-1]
     assert "Текущая сессия." in reply.text
     assert "Режим доступа: `Песочница`" in reply.text
+    assert f"Model: `{settings.codex_model}`" in reply.text
+    assert "Reasoning: `Medium`" in reply.text
     assert keyboard_callback_data(reply.kwargs["reply_markup"]) == [
         ["nav:repo", "mode:show"],
-        ["action:new"],
+        ["llm:show", "action:new"],
     ]
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_llm_callback_opens_editor_and_persists_defaults(tmp_path: Path) -> None:
+    project_dir = tmp_path / "app"
+    project_dir.mkdir()
+    store = SessionStore(tmp_path / "db.sqlite3")
+    await store.initialize()
+    settings = make_settings(tmp_path)
+    bot = CodexTelegramBot(settings, store)
+
+    callback_query = FakeCallbackQuery(from_user_id=42, data="llm:show")
+    update = FakeUpdate(user_id=42, callback_query=callback_query)
+    context = FakeContext()
+    context.user_data["current_directory"] = project_dir
+
+    await bot.handle_ui_callback(update, context)
+
+    assert "Настройка LLM." in callback_query.edits[-1][0]
+    assert f"Model: `{settings.codex_model}`" in callback_query.edits[-1][0]
+    assert "Reasoning: `Medium`" in callback_query.edits[-1][0]
+    assert keyboard_callback_data(callback_query.edits[-1][1]["reply_markup"]) == [
+        ["llm:model:show", "llm:reasoning:show"],
+        ["nav:menu"],
+    ]
+    prefs = await store.get_user_preferences(42)
+    assert prefs is not None
+    assert prefs.model_id == settings.codex_model
+    assert prefs.reasoning_effort == "medium"
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_llm_model_and_reasoning_callbacks_update_preferences(tmp_path: Path) -> None:
+    project_dir = tmp_path / "app"
+    project_dir.mkdir()
+    store = SessionStore(tmp_path / "db.sqlite3")
+    await store.initialize()
+    settings = make_settings(
+        tmp_path,
+        codex_model="gpt-5.4",
+        codex_model_options=(
+            '[{"id":"gpt-5.4","label":"GPT-5.4","reasoning_efforts":["low","medium","high","xhigh"]},'
+            '{"id":"gpt-5.4-mini","label":"GPT-5.4 mini","reasoning_efforts":["low","medium","high","xhigh"]}]'
+        ),
+    )
+    bot = CodexTelegramBot(settings, store)
+
+    context = FakeContext()
+    context.user_data["current_directory"] = project_dir
+
+    model_query = FakeCallbackQuery(from_user_id=42, data="llm:model:set:1")
+    model_update = FakeUpdate(user_id=42, callback_query=model_query)
+    await bot.handle_ui_callback(model_update, context)
+
+    prefs = await store.get_user_preferences(42)
+    assert prefs is not None
+    assert prefs.model_id == "gpt-5.4-mini"
+    assert "GPT-5.4 mini" in model_query.edits[-1][0]
+
+    reasoning_query = FakeCallbackQuery(from_user_id=42, data="llm:reasoning:set:xhigh")
+    reasoning_update = FakeUpdate(user_id=42, callback_query=reasoning_query)
+    await bot.handle_ui_callback(reasoning_update, context)
+
+    prefs = await store.get_user_preferences(42)
+    assert prefs is not None
+    assert prefs.reasoning_effort == "xhigh"
+    assert "X-High" in reasoning_query.edits[-1][0]
     await store.close()
 
 
@@ -786,7 +857,14 @@ async def test_handle_text_updates_existing_session_on_failure(
     bot = CodexTelegramBot(settings, store)
     fake_logger = FakeLogger()
     attach_fake_logger(bot, fake_logger)
-    await store.upsert_session(42, str(project_dir), "existing-thread", last_status="success")
+    await store.upsert_session(
+        42,
+        str(project_dir),
+        "existing-thread",
+        last_status="success",
+        model_id=settings.codex_model or "",
+        reasoning_effort=settings.codex_default_reasoning_effort.value,
+    )
     bot.codex = FakeCodex(
         CodexResponse(
             final_text="",
