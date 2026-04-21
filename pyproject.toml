@@ -1,0 +1,35 @@
+[project]
+name = "codex-telegram-bot"
+version = "0.1.0"
+description = "Telegram wrapper around OpenAI Codex CLI with session persistence, voice, files, and project routing"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "python-telegram-bot[rate-limiter]>=22.0",
+  "pydantic>=2.8.2",
+  "pydantic-settings>=2.3.4",
+  "structlog>=24.4.0",
+  "aiosqlite>=0.20.0",
+  "python-dotenv>=1.0.1",
+  "openai>=1.35.0",
+  "Markdown>=3.7",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.4.2",
+  "pytest-asyncio>=1.2.0",
+]
+
+[project.scripts]
+codex-telegram-bot = "codex_telegram_bot.main:run"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
