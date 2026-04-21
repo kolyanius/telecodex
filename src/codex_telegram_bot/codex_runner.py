@@ -37,6 +37,8 @@ RECOVERABLE_RESUME_PATTERNS = (
 
 
 class CodexRunner:
+    STREAM_LINE_LIMIT_BYTES = 16 * 1024 * 1024
+
     def __init__(self, settings: Settings):
         self.settings = settings
 
@@ -145,6 +147,7 @@ class CodexRunner:
                 env=env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                limit=self.STREAM_LINE_LIMIT_BYTES,
             )
         except FileNotFoundError:
             return self._build_response(

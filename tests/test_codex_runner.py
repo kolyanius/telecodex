@@ -107,6 +107,35 @@ async def test_runner_success_and_event_normalization(monkeypatch: pytest.Monkey
 
 
 @pytest.mark.asyncio
+async def test_runner_raises_subprocess_stream_limit_for_large_json_events(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    settings = make_settings(tmp_path)
+    runner = CodexRunner(settings)
+    large_text = "x" * 70_000
+    process = FakeProcess(
+        stdout_lines=[
+            '{"type":"item.completed","item":{"type":"assistant_message","text":"'
+            + large_text
+            + '"}}\n'
+        ]
+    )
+    captured: dict[str, int] = {}
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        captured["limit"] = kwargs["limit"]
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    response = await runner.run(prompt="large", cwd=tmp_path, launch_mode=CodexLaunchMode.SANDBOX)
+
+    assert captured["limit"] > len(large_text)
+    assert response.status == CodexResultStatus.SUCCESS
+    assert response.final_text == large_text
+
+
+@pytest.mark.asyncio
 async def test_runner_prefers_final_snapshot_over_streamed_deltas(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
