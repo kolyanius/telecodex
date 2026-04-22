@@ -6,6 +6,7 @@ import os
 import shlex
 import shutil
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
@@ -14,6 +15,7 @@ import structlog
 from .config import Settings
 from .models import (
     CodexLaunchMode,
+    LocalCodexSession,
     CodexResponse,
     CodexResultStatus,
     CodexStreamEvent,
@@ -42,6 +44,56 @@ class CodexRunner:
     def __init__(self, settings: Settings):
         self.settings = settings
 
+    def discover_latest_session_id(
+        self,
+        cwd: Path,
+        *,
+        modified_after: Optional[float] = None,
+    ) -> Optional[str]:
+        sessions_dir = self._codex_sessions_dir()
+        if not sessions_dir.exists() or not sessions_dir.is_dir():
+            return None
+
+        target_cwd = str(cwd.expanduser().resolve())
+        session_files = sorted(
+            self._iter_session_files(sessions_dir),
+            key=lambda path: self._safe_mtime(path),
+            reverse=True,
+        )
+        for session_file in session_files:
+            if modified_after is not None and self._safe_mtime(session_file) <= modified_after:
+                continue
+            session_id = self._read_matching_session_id(session_file, target_cwd)
+            if session_id:
+                return session_id
+        return None
+
+    def discover_local_sessions(
+        self,
+        cwd: Path,
+        *,
+        limit: Optional[int] = None,
+    ) -> list[LocalCodexSession]:
+        sessions_dir = self._codex_sessions_dir()
+        if not sessions_dir.exists() or not sessions_dir.is_dir():
+            return []
+
+        target_cwd = str(cwd.expanduser().resolve())
+        session_files = sorted(
+            self._iter_session_files(sessions_dir),
+            key=lambda path: self._safe_mtime(path),
+            reverse=True,
+        )
+        sessions: list[LocalCodexSession] = []
+        for session_file in session_files:
+            session = self._read_local_session(session_file, target_cwd)
+            if session is None:
+                continue
+            sessions.append(session)
+            if limit is not None and len(sessions) >= limit:
+                break
+        return sessions
+
     def validate_cli_available(self) -> None:
         cli_path = self.settings.codex_cli_path
         if os.sep in cli_path:
@@ -58,6 +110,151 @@ class CodexRunner:
                 f"Codex CLI '{cli_path}' was not found in PATH. "
                 "Install Codex or set CODEX_CLI_PATH explicitly."
             )
+
+    @staticmethod
+    def _codex_sessions_dir() -> Path:
+        codex_home = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser()
+        return codex_home / "sessions"
+
+    @staticmethod
+    def _iter_session_files(sessions_dir: Path) -> list[Path]:
+        try:
+            return list(sessions_dir.rglob("*.jsonl"))
+        except OSError:
+            return []
+
+    @staticmethod
+    def _safe_mtime(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    @staticmethod
+    def _read_matching_session_id(session_file: Path, target_cwd: str) -> Optional[str]:
+        try:
+            with session_file.open("r", encoding="utf-8") as handle:
+                first_line = handle.readline()
+        except OSError:
+            return None
+        if not first_line:
+            return None
+        try:
+            event = json.loads(first_line)
+        except json.JSONDecodeError:
+            return None
+        if event.get("type") != "session_meta":
+            return None
+        payload = event.get("payload") or {}
+        if str(payload.get("cwd", "")) != target_cwd:
+            return None
+        session_id = str(payload.get("id", "")).strip()
+        return session_id or None
+
+    @classmethod
+    def _read_local_session(
+        cls,
+        session_file: Path,
+        target_cwd: str,
+    ) -> Optional[LocalCodexSession]:
+        try:
+            updated_mtime = cls._safe_mtime(session_file)
+            updated_at = datetime.fromtimestamp(updated_mtime)
+            with session_file.open("r", encoding="utf-8") as handle:
+                first_line = handle.readline()
+                if not first_line:
+                    return None
+                try:
+                    event = json.loads(first_line)
+                except json.JSONDecodeError:
+                    return None
+                if event.get("type") != "session_meta":
+                    return None
+                payload = event.get("payload") or {}
+                if str(payload.get("cwd", "")) != target_cwd:
+                    return None
+                session_id = str(payload.get("id", "")).strip()
+                if not session_id:
+                    return None
+                created_at = cls._parse_session_timestamp(payload.get("timestamp")) or updated_at
+                first_prompt = ""
+                for line in handle:
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    first_prompt = cls._extract_first_prompt(event)
+                    if first_prompt:
+                        break
+        except OSError:
+            return None
+
+        return LocalCodexSession(
+            session_id=session_id,
+            cwd=Path(target_cwd),
+            created_at=created_at,
+            updated_at=updated_at,
+            source_path=session_file,
+            first_prompt=first_prompt,
+        )
+
+    @staticmethod
+    def _parse_session_timestamp(value: object) -> Optional[datetime]:
+        if not value:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+    @classmethod
+    def _extract_first_prompt(cls, event: dict) -> str:
+        event_type = event.get("type")
+        payload = event.get("payload") or {}
+        if event_type == "event_msg":
+            if payload.get("type") == "user_message":
+                return cls._normalize_human_prompt(payload.get("message"))
+            return ""
+        if event_type != "response_item":
+            return ""
+        if payload.get("role") != "user":
+            return ""
+        return cls._extract_input_text(payload)
+
+    @classmethod
+    def _extract_input_text(cls, payload: dict) -> str:
+        content = payload.get("content")
+        if isinstance(content, str):
+            return cls._normalize_human_prompt(content)
+        if not isinstance(content, list):
+            return ""
+        for item in content:
+            if isinstance(item, str):
+                prompt = cls._normalize_human_prompt(item)
+            elif isinstance(item, dict) and item.get("type") == "input_text":
+                prompt = cls._normalize_human_prompt(item.get("text"))
+            else:
+                prompt = ""
+            if prompt:
+                return prompt
+        return ""
+
+    @staticmethod
+    def _normalize_human_prompt(value: object) -> str:
+        if not isinstance(value, str):
+            return ""
+        text = " ".join(value.strip().split())
+        if not text:
+            return ""
+        lowered = text[:256].lower()
+        if lowered.startswith("<environment_context"):
+            return ""
+        if lowered.startswith("<") and "agents.md" in lowered:
+            return ""
+        return text
 
     async def run(
         self,

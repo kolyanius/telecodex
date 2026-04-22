@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from pathlib import Path
 
@@ -289,6 +290,142 @@ def test_validate_cli_available_missing_command(monkeypatch: pytest.MonkeyPatch,
 
     with pytest.raises(RuntimeError, match="not found"):
         runner.validate_cli_available()
+
+
+def test_discover_latest_session_id_matches_exact_cwd(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    codex_home = tmp_path / "codex-home"
+    sessions_dir = codex_home / "sessions" / "2026" / "04" / "22"
+    sessions_dir.mkdir(parents=True)
+    project_dir = tmp_path / "project"
+    other_dir = tmp_path / "other"
+    project_dir.mkdir()
+    other_dir.mkdir()
+
+    older = sessions_dir / "older.jsonl"
+    newer = sessions_dir / "newer.jsonl"
+    other = sessions_dir / "other.jsonl"
+    older.write_text(
+        '{"type":"session_meta","payload":{"id":"older-session","cwd":"'
+        + str(project_dir)
+        + '"}}\n',
+        encoding="utf-8",
+    )
+    newer.write_text(
+        '{"type":"session_meta","payload":{"id":"newer-session","cwd":"'
+        + str(project_dir)
+        + '"}}\n',
+        encoding="utf-8",
+    )
+    other.write_text(
+        '{"type":"session_meta","payload":{"id":"other-session","cwd":"'
+        + str(other_dir)
+        + '"}}\n',
+        encoding="utf-8",
+    )
+    os.utime(older, (1, 1))
+    os.utime(newer, (3, 3))
+    os.utime(other, (5, 5))
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+    runner = CodexRunner(make_settings(tmp_path))
+
+    assert runner.discover_latest_session_id(project_dir) == "newer-session"
+    assert runner.discover_latest_session_id(project_dir, modified_after=4) is None
+
+
+def test_discover_local_sessions_lists_matching_cwd_sorted_and_ignores_bad_jsonl(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    codex_home = tmp_path / "codex-home"
+    sessions_dir = codex_home / "sessions" / "2026" / "04" / "22"
+    sessions_dir.mkdir(parents=True)
+    project_dir = tmp_path / "project"
+    other_dir = tmp_path / "other"
+    project_dir.mkdir()
+    other_dir.mkdir()
+
+    def write_session(path: Path, session_id: str, cwd: Path, lines: list[dict | str]) -> None:
+        encoded = [
+            json.dumps(
+                {
+                    "type": "session_meta",
+                    "payload": {
+                        "id": session_id,
+                        "cwd": str(cwd),
+                        "timestamp": "2026-04-22T12:00:00Z",
+                    },
+                }
+            )
+        ]
+        for line in lines:
+            encoded.append(line if isinstance(line, str) else json.dumps(line, ensure_ascii=False))
+        path.write_text("\n".join(encoded) + "\n", encoding="utf-8")
+
+    older = sessions_dir / "older.jsonl"
+    newer = sessions_dir / "newer.jsonl"
+    other = sessions_dir / "other.jsonl"
+    broken = sessions_dir / "broken.jsonl"
+    write_session(
+        older,
+        "older-session",
+        project_dir,
+        [
+            "{broken",
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "user_message",
+                    "message": "Implement manual session picker",
+                },
+            },
+        ],
+    )
+    write_session(
+        newer,
+        "newer-session",
+        project_dir,
+        [
+            {
+                "type": "response_item",
+                "payload": {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "<environment_context>...</environment_context>"},
+                        {"type": "input_text", "text": "Continue old Codex chat"},
+                    ],
+                },
+            }
+        ],
+    )
+    write_session(
+        other,
+        "other-session",
+        other_dir,
+        [
+            {
+                "type": "event_msg",
+                "payload": {"type": "user_message", "message": "Wrong project"},
+            }
+        ],
+    )
+    broken.write_text("{not-json\n", encoding="utf-8")
+    os.utime(older, (1, 1))
+    os.utime(newer, (3, 3))
+    os.utime(other, (5, 5))
+    os.utime(broken, (7, 7))
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+    runner = CodexRunner(make_settings(tmp_path))
+
+    sessions = runner.discover_local_sessions(project_dir)
+
+    assert [session.session_id for session in sessions] == ["newer-session", "older-session"]
+    assert sessions[0].first_prompt == "Continue old Codex chat"
+    assert sessions[1].first_prompt == "Implement manual session picker"
+    assert sessions[0].source_path == newer
+    assert runner.discover_local_sessions(project_dir, limit=1)[0].session_id == "newer-session"
 
 
 @pytest.mark.asyncio

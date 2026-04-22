@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
@@ -84,6 +85,16 @@ class ProjectSession:
     updated_at: str
     last_status: str = ""
     last_error: str = ""
+
+
+@dataclass
+class LocalCodexSession:
+    session_id: str
+    cwd: Path
+    created_at: datetime
+    updated_at: datetime
+    source_path: Path
+    first_prompt: str = ""
 
 
 @dataclass

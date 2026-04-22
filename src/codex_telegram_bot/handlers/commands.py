@@ -106,6 +106,23 @@ class CommandHandlers:
         )
         await self.navigation.show_status(update, context, request_context)
 
+    async def sessions_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        request_context = self.observability.make_request_context(
+            update,
+            context,
+            source="command",
+            command_name="sessions",
+        )
+        await self.observability.record_event("telegram_update_received", request_context)
+        if not await self.observability.ensure_authorized(update, request_context):
+            return
+        await self.observability.record_event(
+            "telegram_command_sessions",
+            request_context,
+            audit_event="command_sessions",
+        )
+        await self.navigation.show_sessions(update, context, request_context)
+
     async def verbose_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         request_context = self.observability.make_request_context(
             update,

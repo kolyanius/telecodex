@@ -2,8 +2,23 @@ from __future__ import annotations
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-from ...models import CodexLaunchMode
+from ...models import CodexLaunchMode, LocalCodexSession
 from ...services.projects import RepoOption
+
+
+def _shorten_label(value: str, *, limit: int) -> str:
+    text = " ".join(value.strip().split())
+    if len(text) <= limit:
+        return text
+    return text[: max(limit - 1, 0)].rstrip() + "…"
+
+
+def render_local_session_button_label(session: LocalCodexSession) -> str:
+    prefix = session.updated_at.strftime("%Y-%m-%d %H:%M")
+    prompt = _shorten_label(session.first_prompt, limit=56)
+    if not prompt:
+        prompt = session.session_id[:8]
+    return f"{prefix} · {prompt}"
 
 
 def build_session_keyboard() -> InlineKeyboardMarkup:
@@ -13,6 +28,7 @@ def build_session_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("📁 Проект", callback_data="nav:repo"),
                 InlineKeyboardButton("⚙️ Режим", callback_data="mode:show"),
             ],
+            [InlineKeyboardButton("🗂 Сессии", callback_data="session:list")],
             [InlineKeyboardButton("🆕 Новая сессия", callback_data="action:new")],
         ]
     )
@@ -53,6 +69,28 @@ def build_repo_keyboard(entries: list[RepoOption]) -> InlineKeyboardMarkup:
     ]
     rows.append([InlineKeyboardButton("➕ Создать проект", callback_data="action:create_project")])
     rows.append([InlineKeyboardButton("⬅️ В меню", callback_data="nav:menu")])
+    return InlineKeyboardMarkup(rows)
+
+
+def build_local_sessions_keyboard(sessions: list[LocalCodexSession]) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                render_local_session_button_label(session),
+                callback_data=f"session:select:{session.session_id}",
+            )
+        ]
+        for session in sessions
+    ]
+    rows.extend(
+        [
+            [
+                InlineKeyboardButton("🔄 Обновить", callback_data="session:refresh"),
+                InlineKeyboardButton("🆕 Новая", callback_data="action:new"),
+            ],
+            [InlineKeyboardButton("⬅️ Назад", callback_data="nav:menu")],
+        ]
+    )
     return InlineKeyboardMarkup(rows)
 
 

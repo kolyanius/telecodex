@@ -66,6 +66,10 @@ async def test_session_store_crud_and_audit(tmp_path: Path) -> None:
 
     await store.clear_session(100, "/workspace/project")
     assert await store.get_session(100, "/workspace/project") is None
+    assert await store.get_session_reset_at_unix(100, "/workspace/project") is not None
+
+    await store.upsert_session(100, "/workspace/project", "thread-2", last_status="success")
+    assert await store.get_session_reset_at_unix(100, "/workspace/project") is None
     await store.close()
 
 

@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+from datetime import datetime
+from pathlib import Path
+
 import pytest
 
-from codex_telegram_bot.models import CodexLaunchMode, CodexResponse, CodexResultStatus
+from codex_telegram_bot.models import (
+    CodexLaunchMode,
+    CodexResponse,
+    CodexResultStatus,
+    LocalCodexSession,
+)
 from codex_telegram_bot.services.projects import RepoOption
 from codex_telegram_bot.telegram.ui.keyboards import (
+    build_local_sessions_keyboard,
     build_mode_editor_keyboard,
     build_repo_keyboard,
     build_session_keyboard,
@@ -38,8 +47,44 @@ def test_build_session_keyboard_has_expected_actions() -> None:
 
     assert keyboard_callback_data(markup) == [
         ["nav:repo", "mode:show"],
+        ["session:list"],
         ["action:new"],
     ]
+
+
+def test_build_local_sessions_keyboard_uses_prompt_and_short_id_fallback() -> None:
+    updated_at = datetime(2026, 4, 22, 18, 30)
+    sessions = [
+        LocalCodexSession(
+            session_id="session-with-prompt",
+            cwd=Path("/tmp/app"),
+            created_at=updated_at,
+            updated_at=updated_at,
+            source_path=Path("/tmp/session-with-prompt.jsonl"),
+            first_prompt="Fix the Telegram session picker routing",
+        ),
+        LocalCodexSession(
+            session_id="fallback-session",
+            cwd=Path("/tmp/app"),
+            created_at=updated_at,
+            updated_at=updated_at,
+            source_path=Path("/tmp/fallback-session.jsonl"),
+            first_prompt="",
+        ),
+    ]
+
+    markup = build_local_sessions_keyboard(sessions)
+
+    assert keyboard_callback_data(markup) == [
+        ["session:select:session-with-prompt"],
+        ["session:select:fallback-session"],
+        ["session:refresh", "action:new"],
+        ["nav:menu"],
+    ]
+    assert markup.inline_keyboard[0][0].text == (
+        "2026-04-22 18:30 · Fix the Telegram session picker routing"
+    )
+    assert markup.inline_keyboard[1][0].text == "2026-04-22 18:30 · fallback"
 
 
 def test_build_repo_keyboard_ends_with_back_to_menu() -> None:

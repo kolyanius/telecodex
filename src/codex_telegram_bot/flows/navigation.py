@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from telegram import Update
@@ -12,6 +13,7 @@ from ..services.projects import ProjectService
 from ..session_store import SessionStore
 from ..telegram.ui.keyboards import (
     build_navigation_keyboard,
+    build_local_sessions_keyboard,
     build_no_project_keyboard,
     build_repo_keyboard,
     build_session_keyboard,
@@ -21,6 +23,7 @@ from ..telegram.ui.responder import TelegramResponder
 from ..telegram.ui.texts import (
     render_home_text,
     render_no_projects_text,
+    render_local_sessions_text,
     render_project_created_text,
     render_project_selected_text,
     render_repo_picker_text,
@@ -106,6 +109,116 @@ class NavigationFlow:
             text,
             reply_markup=reply_markup,
             parse_mode="Markdown",
+        )
+
+    async def show_sessions(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        request_context,
+        *,
+        edit: bool = False,
+        notice: str = "",
+    ) -> None:
+        project = await self.projects.resolve_current_project(context, request_context=request_context)
+        if project.path is None:
+            text = render_no_projects_text()
+            reply_markup = build_no_project_keyboard()
+        else:
+            sessions = await asyncio.to_thread(
+                self.execution.codex.discover_local_sessions,
+                project.path,
+                limit=10,
+            )
+            current_thread_id = await self.session_store.get_thread_id(
+                update.effective_user.id,
+                str(project.path),
+            )
+            await self.observability.record_event(
+                "telegram_sessions_opened",
+                request_context,
+                audit_event="telegram_sessions_opened",
+                project_path=str(project.path),
+                session_count=len(sessions),
+            )
+            text = render_local_sessions_text(
+                cwd=project.path,
+                sessions=sessions,
+                current_thread_id=current_thread_id or "",
+                has_active_run=update.effective_user.id in self.execution.active_interrupts,
+                notice=notice,
+            )
+            reply_markup = build_local_sessions_keyboard(sessions)
+        if edit:
+            await self.responder.edit_callback_message(
+                update,
+                text,
+                reply_markup=reply_markup,
+                parse_mode="Markdown",
+            )
+            return
+        await update.effective_message.reply_text(
+            text,
+            reply_markup=reply_markup,
+            parse_mode="Markdown",
+        )
+
+    async def select_session_from_callback(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        request_context,
+        session_id: str,
+    ) -> None:
+        query = update.callback_query
+        user_id = update.effective_user.id
+        if user_id in self.execution.active_interrupts:
+            await query.answer("Дождись завершения текущего запуска.", show_alert=True)
+            return
+
+        project = await self.projects.resolve_current_project(context, request_context=request_context)
+        if project.path is None:
+            await query.answer("Сначала выбери проект.", show_alert=True)
+            await self.responder.edit_callback_message(
+                update,
+                render_no_projects_text(),
+                reply_markup=build_no_project_keyboard(),
+                parse_mode="Markdown",
+            )
+            return
+
+        sessions = await asyncio.to_thread(
+            self.execution.codex.discover_local_sessions,
+            project.path,
+            limit=None,
+        )
+        selected = next((session for session in sessions if session.session_id == session_id), None)
+        if selected is None:
+            await query.answer("Сессия не найдена.", show_alert=True)
+            await self.show_sessions(update, context, request_context, edit=True)
+            return
+
+        await self.session_store.upsert_session(
+            user_id,
+            str(project.path),
+            selected.session_id,
+            last_status="selected",
+        )
+        await self.observability.record_event(
+            "telegram_session_selected",
+            request_context,
+            audit_event="telegram_session_selected",
+            event_status="selected",
+            project_path=str(project.path),
+            thread_id=selected.session_id,
+        )
+        await query.answer("Сессия выбрана")
+        await self.show_menu(
+            update,
+            context,
+            request_context,
+            edit=True,
+            notice=f"Выбрана сессия `{selected.session_id[:8]}`.",
         )
 
     async def show_start_chat(

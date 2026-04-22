@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ...config import Settings
-from ...models import CodexLaunchMode, CodexResponse, CodexResultStatus
+from ...models import CodexLaunchMode, CodexResponse, CodexResultStatus, LocalCodexSession
 from ...services.projects import RepoOption
 
 
@@ -108,6 +108,36 @@ def render_session_text(
     )
     if has_active_run:
         lines.append("Запуск: `выполняется`")
+    return "\n".join(lines)
+
+
+def render_local_sessions_text(
+    *,
+    cwd: Path,
+    sessions: list[LocalCodexSession],
+    current_thread_id: str = "",
+    has_active_run: bool = False,
+    notice: str = "",
+) -> str:
+    lines = []
+    if notice:
+        lines.extend([notice, ""])
+    lines.extend(
+        [
+            "Сессии проекта.",
+            "",
+            f"Проект: `{cwd.name}`",
+            f"Текущая: `{current_thread_id or 'none'}`",
+            "",
+        ]
+    )
+    if sessions:
+        lines.append("Выбери локальную сессию Codex для продолжения.")
+        lines.append(f"Показаны последние `{len(sessions)}`.")
+    else:
+        lines.append("Для этого проекта локальные сессии Codex не найдены.")
+    if has_active_run:
+        lines.extend(["", "Выбор сессии недоступен, пока Codex выполняет запрос."])
     return "\n".join(lines)
 
 
