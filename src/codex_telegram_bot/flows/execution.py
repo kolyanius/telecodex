@@ -249,7 +249,7 @@ class PromptExecutionFlow:
         request_started_at = time.monotonic()
         await update.effective_chat.send_action(ChatAction.TYPING)
         progress = await update.effective_message.reply_text(
-            build_progress_text(0, []),
+            build_progress_text(0, [], project_name=cwd.name),
             reply_markup=stop_markup,
         )
 
@@ -331,6 +331,7 @@ class PromptExecutionFlow:
                     build_progress_text(
                         int(time.monotonic() - request_started_at),
                         last_progress_lines,
+                        project_name=cwd.name,
                     ),
                     reply_markup=stop_markup if not interrupt_event.is_set() else None,
                 )
@@ -590,6 +591,7 @@ class PromptExecutionFlow:
                     build_progress_text(
                         int(time.monotonic() - request_started_at),
                         last_progress_lines,
+                        project_name=Path(request_context.cwd).name if request_context.cwd else "",
                     ),
                     reply_markup=stop_markup if not interrupt_event.is_set() else None,
                 )

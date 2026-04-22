@@ -222,8 +222,13 @@ class CodexTelegramBot:
         return TelegramResponder.chunk_text(text, size)
 
     @staticmethod
-    def _build_progress_text(elapsed_seconds: int, last_progress_lines: list[str]) -> str:
-        return build_progress_text(elapsed_seconds, last_progress_lines)
+    def _build_progress_text(
+        elapsed_seconds: int,
+        last_progress_lines: list[str],
+        *,
+        project_name: str = "",
+    ) -> str:
+        return build_progress_text(elapsed_seconds, last_progress_lines, project_name=project_name)
 
     @staticmethod
     def build_stop_keyboard(user_id: int):

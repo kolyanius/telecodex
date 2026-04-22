@@ -21,6 +21,8 @@ class Settings(BaseSettings):
 
     codex_cli_path: str = "codex"
     codex_model: Optional[str] = "gpt-5.3-codex"
+    codex_reasoning_effort: Optional[str] = None
+    codex_context_window: int = 258400
     codex_full_auto: bool = True
     codex_auto_edit: bool = False
     codex_default_launch_mode: CodexLaunchMode = CodexLaunchMode.SANDBOX
@@ -121,6 +123,13 @@ class Settings(BaseSettings):
             raise ValueError("CODEX_TIMEOUT_SECONDS must be > 0")
         return value
 
+    @field_validator("codex_context_window")
+    @classmethod
+    def validate_codex_context_window(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("CODEX_CONTEXT_WINDOW must be > 0")
+        return value
+
     @field_validator("codex_default_launch_mode", mode="before")
     @classmethod
     def validate_codex_default_launch_mode(cls, value) -> CodexLaunchMode:
@@ -188,6 +197,22 @@ class Settings(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @field_validator("codex_reasoning_effort", mode="before")
+    @classmethod
+    def normalize_codex_reasoning_effort(cls, value):
+        if value is None:
+            return None
+        normalized = str(value).strip().lower()
+        if not normalized:
+            return None
+        valid_efforts = {"low", "medium", "high", "xhigh"}
+        if normalized not in valid_efforts:
+            raise ValueError(
+                "CODEX_REASONING_EFFORT must be one of: "
+                f"{', '.join(sorted(valid_efforts))}"
+            )
+        return normalized
 
     def model_post_init(self, __context) -> None:
         if self.voice_provider == "openai_compatible":

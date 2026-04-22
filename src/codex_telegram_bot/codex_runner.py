@@ -319,6 +319,11 @@ class CodexRunner:
             cmd.append("--dangerously-bypass-approvals-and-sandbox")
         if self.settings.codex_model:
             cmd.extend(["--model", self.settings.codex_model])
+        if self.settings.codex_reasoning_effort:
+            cmd.extend([
+                "--config",
+                f'model_reasoning_effort="{self.settings.codex_reasoning_effort}"',
+            ])
         if previous_thread_id:
             cmd.extend(["resume", previous_thread_id])
         if image_paths:

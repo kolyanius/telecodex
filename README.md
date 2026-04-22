@@ -93,7 +93,9 @@ ALLOWED_USERS=[123456789]
 DATABASE_URL=sqlite:///./codex_telegram_bot.db
 
 CODEX_CLI_PATH=codex
-CODEX_MODEL=gpt-5.3-codex
+CODEX_MODEL=gpt-5.4
+CODEX_REASONING_EFFORT=high
+CODEX_CONTEXT_WINDOW=258400
 CODEX_DEFAULT_LAUNCH_MODE=sandbox
 CODEX_SKIP_GIT_REPO_CHECK=true
 CODEX_TIMEOUT_SECONDS=900
@@ -232,6 +234,8 @@ LOG_LEVEL=INFO
 | --- | --- | --- |
 | `CODEX_CLI_PATH` | путь или имя бинарника Codex CLI | по умолчанию `codex` |
 | `CODEX_MODEL` | модель для Codex CLI | по умолчанию `gpt-5.3-codex`; если очистить значение, флаг `--model` не передаётся |
+| `CODEX_REASONING_EFFORT` | reasoning effort для Codex CLI | `low`, `medium`, `high` или `xhigh`; если очистить значение, override не передаётся |
+| `CODEX_CONTEXT_WINDOW` | размер контекстного окна для расчёта остатка в Telegram | используется только для отображения остатка в ответах |
 | `CODEX_DEFAULT_LAUNCH_MODE` | режим по умолчанию для новых проектов | `sandbox` или `full_access` |
 | `CODEX_SKIP_GIT_REPO_CHECK` | добавляет `--skip-git-repo-check` | по умолчанию `true` |
 | `CODEX_TIMEOUT_SECONDS` | таймаут одного запуска Codex | должен быть больше `0` |

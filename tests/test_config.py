@@ -117,8 +117,22 @@ def test_settings_validate_timeout_and_runs(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="CODEX_TIMEOUT_SECONDS"):
         make_settings(tmp_path, codex_timeout_seconds=0)
 
+    with pytest.raises(ValueError, match="CODEX_CONTEXT_WINDOW"):
+        make_settings(tmp_path, codex_context_window=0)
+
     with pytest.raises(ValueError, match="MAX_ACTIVE_RUNS_PER_USER"):
         make_settings(tmp_path, max_active_runs_per_user=0)
+
+
+def test_settings_validate_codex_reasoning_effort(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path, codex_reasoning_effort="HIGH")
+    assert settings.codex_reasoning_effort == "high"
+
+    settings = make_settings(tmp_path, codex_reasoning_effort="")
+    assert settings.codex_reasoning_effort is None
+
+    with pytest.raises(ValueError, match="CODEX_REASONING_EFFORT"):
+        make_settings(tmp_path, codex_reasoning_effort="extreme")
 
 
 def test_settings_validate_approved_directory(tmp_path: Path) -> None:

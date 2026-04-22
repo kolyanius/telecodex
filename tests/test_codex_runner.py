@@ -473,6 +473,30 @@ async def test_runner_builds_read_only_sandbox_command(
 
 
 @pytest.mark.asyncio
+async def test_runner_passes_reasoning_effort_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    settings = make_settings(tmp_path, codex_model="gpt-5.4", codex_reasoning_effort="high")
+    runner = CodexRunner(settings)
+    process = FakeProcess(stdout_lines=['{"type":"item.completed","item":{"type":"assistant_message","text":"ok"}}\n'])
+    captured: dict[str, tuple] = {}
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        captured["args"] = args
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    response = await runner.run(prompt="hello", cwd=tmp_path, launch_mode=CodexLaunchMode.SANDBOX)
+
+    assert response.status == CodexResultStatus.SUCCESS
+    assert "--model" in captured["args"]
+    assert "gpt-5.4" in captured["args"]
+    assert "--config" in captured["args"]
+    assert 'model_reasoning_effort="high"' in captured["args"]
+
+
+@pytest.mark.asyncio
 async def test_runner_builds_full_access_command(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

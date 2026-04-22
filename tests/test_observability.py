@@ -320,6 +320,8 @@ async def test_status_command_returns_diagnostic_status_without_keyboard(tmp_pat
 
     reply = update.effective_message.replies[-1]
     assert "thread-abc" in reply.text
+    assert "Модель:" in reply.text
+    assert "Контекст:" in reply.text
     assert "Режим доступа: `Песочница`" in reply.text
     assert "reply_markup" not in reply.kwargs or reply.kwargs["reply_markup"] is None
     await store.close()
@@ -781,7 +783,9 @@ async def test_handle_text_writes_request_started_and_finished(
     assert keyboard_callback_data(update.effective_message.replies[1].kwargs["reply_markup"]) == [
         ["action:stop:42"]
     ]
-    assert update.effective_message.replies[1].text == "Working... 0s"
+    assert update.effective_message.replies[1].text == (
+        "Проект: 2026-04-18-project\n\nWorking... 0s"
+    )
     assert update.effective_message.replies[-1].kwargs["parse_mode"] == "HTML"
     assert "reply_markup" not in update.effective_message.replies[-1].kwargs or update.effective_message.replies[-1].kwargs["reply_markup"] is None
     await store.close()
@@ -939,7 +943,7 @@ async def test_handle_text_sends_typing_heartbeat_and_elapsed_progress(
     await bot.handle_text(update, context)
 
     progress_reply = update.effective_message.replies[0]
-    assert progress_reply.text == "Working... 0s"
+    assert progress_reply.text == "Проект: app\n\nWorking... 0s"
     assert progress_reply.progress.deleted is True
     await store.close()
 

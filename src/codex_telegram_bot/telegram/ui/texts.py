@@ -14,6 +14,13 @@ def render_launch_mode_label(launch_mode: CodexLaunchMode) -> str:
     return "Песочница"
 
 
+def render_model_label(settings: Settings) -> str:
+    model = settings.codex_model or "default"
+    if settings.codex_reasoning_effort:
+        return f"{model} {settings.codex_reasoning_effort}"
+    return model
+
+
 def render_home_text(cwd: Optional[Path], *, auto_created: bool = False) -> str:
     if cwd is None:
         return (
@@ -68,6 +75,8 @@ def render_status_text(
             f"Проект: `{cwd.name if cwd is not None else 'не выбран'}`",
             f"Путь: `{cwd if cwd is not None else settings.approved_directory.resolve()}`",
             f"Thread ID: `{session.thread_id if session else 'none'}`",
+            f"Модель: `{render_model_label(settings)}`",
+            f"Контекст: `{settings.codex_context_window}`",
             f"Режим доступа: `{render_launch_mode_label(launch_mode)}`",
             f"Verbose: `{verbose_level}`",
         ]
@@ -204,8 +213,15 @@ def render_final_text(response: CodexResponse) -> str:
     return response.final_text or f"Request failed: {response.error_message}"
 
 
-def build_progress_text(elapsed_seconds: int, last_progress_lines: list[str]) -> str:
+def build_progress_text(
+    elapsed_seconds: int,
+    last_progress_lines: list[str],
+    *,
+    project_name: str = "",
+) -> str:
     header = f"Working... {elapsed_seconds}s"
+    if project_name:
+        header = f"Проект: {project_name}\n\n{header}"
     if not last_progress_lines:
         return header
     return header + "\n\n" + "\n".join(last_progress_lines)
