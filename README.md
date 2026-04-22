@@ -95,7 +95,6 @@ DATABASE_URL=sqlite:///./codex_telegram_bot.db
 CODEX_CLI_PATH=codex
 CODEX_MODEL=gpt-5.3-codex
 CODEX_DEFAULT_REASONING_EFFORT=medium
-CODEX_MODEL_OPTIONS=[{"id":"gpt-5.3-codex","label":"GPT-5.3-Codex","reasoning_efforts":["low","medium","high","xhigh"]},{"id":"gpt-5.4","label":"GPT-5.4","reasoning_efforts":["low","medium","high","xhigh"]}]
 CODEX_DEFAULT_LAUNCH_MODE=sandbox
 CODEX_SKIP_GIT_REPO_CHECK=true
 CODEX_TIMEOUT_SECONDS=900
@@ -117,6 +116,15 @@ LOG_LEVEL=INFO
 ```
 
 > 🎙️ Практическая рекомендация: для голосовых сообщений я рекомендую `Groq` через `VOICE_PROVIDER=openai_compatible`. У него большие бесплатные лимиты, и в реальном Telegram-сценарии их обычно хватает почти на целый день голосового общения. Для `Whisper` здесь удобно использовать `whisper-large-v3-turbo`.
+
+`CODEX_MODEL_OPTIONS` задавать не обязательно. Если переменная не указана, Telegram picker использует встроенный список моделей:
+`GPT-5.4`, `GPT-5.2-Codex`, `GPT-5.1-Codex-Max`, `GPT-5.4-Mini`, `GPT-5.3-Codex`, `GPT-5.2`, `GPT-5.1-Codex-Mini`.
+
+Если нужен свой список, можно явно переопределить его в `.env`, например:
+
+```env
+CODEX_MODEL_OPTIONS=[{"id":"gpt-5.4","label":"GPT-5.4","reasoning_efforts":["low","medium","high","xhigh"]}]
+```
 
 ### 4. ▶️ Запустить бота
 
@@ -233,9 +241,9 @@ LOG_LEVEL=INFO
 | Переменная | Что делает | Комментарий |
 | --- | --- | --- |
 | `CODEX_CLI_PATH` | путь или имя бинарника Codex CLI | по умолчанию `codex` |
-| `CODEX_MODEL` | модель по умолчанию для новых пользователей | должна присутствовать в `CODEX_MODEL_OPTIONS` |
+| `CODEX_MODEL` | модель по умолчанию для новых пользователей | должна присутствовать в эффективном списке моделей: либо встроенном, либо заданном через `CODEX_MODEL_OPTIONS` |
 | `CODEX_DEFAULT_REASONING_EFFORT` | reasoning по умолчанию для новых пользователей | допустимы `low`, `medium`, `high`, `xhigh`; по умолчанию `medium` |
-| `CODEX_MODEL_OPTIONS` | whitelist моделей для Telegram UI | JSON-список объектов `{id,label,reasoning_efforts}` |
+| `CODEX_MODEL_OPTIONS` | optional override для списка моделей в Telegram UI | если не задан, используется встроенный curated list; если задан, полностью заменяет его |
 | `CODEX_DEFAULT_LAUNCH_MODE` | режим по умолчанию для новых проектов | `sandbox` или `full_access` |
 | `CODEX_SKIP_GIT_REPO_CHECK` | добавляет `--skip-git-repo-check` | по умолчанию `true` |
 | `CODEX_TIMEOUT_SECONDS` | таймаут одного запуска Codex | должен быть больше `0` |

@@ -10,6 +10,52 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from .models import CodexLaunchMode, ReasoningEffort
 
 
+def default_codex_model_options() -> list["ModelOption"]:
+    all_reasoning_efforts = [
+        ReasoningEffort.LOW,
+        ReasoningEffort.MEDIUM,
+        ReasoningEffort.HIGH,
+        ReasoningEffort.XHIGH,
+    ]
+    return [
+        ModelOption(
+            id="gpt-5.4",
+            label="GPT-5.4",
+            reasoning_efforts=list(all_reasoning_efforts),
+        ),
+        ModelOption(
+            id="gpt-5.2-codex",
+            label="GPT-5.2-Codex",
+            reasoning_efforts=list(all_reasoning_efforts),
+        ),
+        ModelOption(
+            id="gpt-5.1-codex-max",
+            label="GPT-5.1-Codex-Max",
+            reasoning_efforts=list(all_reasoning_efforts),
+        ),
+        ModelOption(
+            id="gpt-5.4-mini",
+            label="GPT-5.4-Mini",
+            reasoning_efforts=list(all_reasoning_efforts),
+        ),
+        ModelOption(
+            id="gpt-5.3-codex",
+            label="GPT-5.3-Codex",
+            reasoning_efforts=list(all_reasoning_efforts),
+        ),
+        ModelOption(
+            id="gpt-5.2",
+            label="GPT-5.2",
+            reasoning_efforts=list(all_reasoning_efforts),
+        ),
+        ModelOption(
+            id="gpt-5.1-codex-mini",
+            label="GPT-5.1-Codex-Mini",
+            reasoning_efforts=list(all_reasoning_efforts),
+        ),
+    ]
+
+
 class ModelOption(BaseModel):
     id: str
     label: str
@@ -192,18 +238,7 @@ class Settings(BaseSettings):
             raise ValueError("CODEX_MODEL must be configured")
 
         if not self.codex_model_options:
-            self.codex_model_options = [
-                ModelOption(
-                    id=self.codex_model,
-                    label=self.codex_model,
-                    reasoning_efforts=[
-                        ReasoningEffort.LOW,
-                        ReasoningEffort.MEDIUM,
-                        ReasoningEffort.HIGH,
-                        ReasoningEffort.XHIGH,
-                    ],
-                )
-            ]
+            self.codex_model_options = default_codex_model_options()
 
         option_ids = {option.id for option in self.codex_model_options}
         if self.codex_model not in option_ids:

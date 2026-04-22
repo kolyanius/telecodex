@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_telegram_bot.config import Settings
+from codex_telegram_bot.config import Settings, default_codex_model_options
 
 
 def make_settings(tmp_path: Path, **overrides) -> Settings:
@@ -182,6 +182,37 @@ def test_settings_validate_default_launch_mode(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="CODEX_DEFAULT_LAUNCH_MODE"):
         make_settings(tmp_path, codex_default_launch_mode="unsafe")
+
+
+def test_settings_use_built_in_codex_model_options_when_env_is_absent(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+
+    assert [option.id for option in settings.codex_model_options] == [
+        option.id for option in default_codex_model_options()
+    ]
+    assert [option.label for option in settings.codex_model_options] == [
+        "GPT-5.4",
+        "GPT-5.2-Codex",
+        "GPT-5.1-Codex-Max",
+        "GPT-5.4-Mini",
+        "GPT-5.3-Codex",
+        "GPT-5.2",
+        "GPT-5.1-Codex-Mini",
+    ]
+
+
+def test_settings_custom_codex_model_options_replace_built_in_defaults(tmp_path: Path) -> None:
+    settings = make_settings(
+        tmp_path,
+        codex_model="gpt-5.4",
+        codex_model_options=(
+            '[{"id":"gpt-5.4","label":"GPT-5.4","reasoning_efforts":["low","medium"]}]'
+        ),
+    )
+
+    assert len(settings.codex_model_options) == 1
+    assert settings.codex_model_options[0].id == "gpt-5.4"
+    assert settings.codex_model_options[0].label == "GPT-5.4"
 
 
 def test_settings_parse_codex_model_options(tmp_path: Path) -> None:

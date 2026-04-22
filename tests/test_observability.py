@@ -367,7 +367,7 @@ async def test_menu_command_opens_session_card(tmp_path: Path) -> None:
     reply = update.effective_message.replies[-1]
     assert "Текущая сессия." in reply.text
     assert "Режим доступа: `Песочница`" in reply.text
-    assert f"Model: `{settings.codex_model}`" in reply.text
+    assert "Model: `GPT-5.3-Codex`" in reply.text
     assert "Reasoning: `Medium`" in reply.text
     assert keyboard_callback_data(reply.kwargs["reply_markup"]) == [
         ["nav:repo", "mode:show"],
@@ -393,7 +393,7 @@ async def test_llm_callback_opens_editor_and_persists_defaults(tmp_path: Path) -
     await bot.handle_ui_callback(update, context)
 
     assert "Настройка LLM." in callback_query.edits[-1][0]
-    assert f"Model: `{settings.codex_model}`" in callback_query.edits[-1][0]
+    assert "Model: `GPT-5.3-Codex`" in callback_query.edits[-1][0]
     assert "Reasoning: `Medium`" in callback_query.edits[-1][0]
     assert keyboard_callback_data(callback_query.edits[-1][1]["reply_markup"]) == [
         ["llm:model:show", "llm:reasoning:show"],
@@ -403,6 +403,39 @@ async def test_llm_callback_opens_editor_and_persists_defaults(tmp_path: Path) -
     assert prefs is not None
     assert prefs.model_id == settings.codex_model
     assert prefs.reasoning_effort == "medium"
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_model_picker_uses_built_in_default_list_when_env_options_are_absent(
+    tmp_path: Path,
+) -> None:
+    project_dir = tmp_path / "app"
+    project_dir.mkdir()
+    store = SessionStore(tmp_path / "db.sqlite3")
+    await store.initialize()
+    settings = make_settings(tmp_path)
+    bot = CodexTelegramBot(settings, store)
+
+    callback_query = FakeCallbackQuery(from_user_id=42, data="llm:model:show")
+    update = FakeUpdate(user_id=42, callback_query=callback_query)
+    context = FakeContext()
+    context.user_data["current_directory"] = project_dir
+
+    await bot.handle_ui_callback(update, context)
+
+    assert "Выбор модели." in callback_query.edits[-1][0]
+    markup = callback_query.edits[-1][1]["reply_markup"]
+    assert [row[0].text for row in markup.inline_keyboard[:-1]] == [
+        "GPT-5.4",
+        "GPT-5.2-Codex",
+        "GPT-5.1-Codex-Max",
+        "GPT-5.4-Mini",
+        "• GPT-5.3-Codex",
+        "GPT-5.2",
+        "GPT-5.1-Codex-Mini",
+    ]
+    assert markup.inline_keyboard[-1][0].callback_data == "llm:show"
     await store.close()
 
 
