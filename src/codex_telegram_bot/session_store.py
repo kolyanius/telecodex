@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -45,6 +46,9 @@ class SessionStore:
         if current_version < 3:
             await self._migration_v3()
             await self._set_schema_version(3)
+        if current_version < 4:
+            await self._migration_v4()
+            await self._set_schema_version(4)
 
     async def _get_schema_version(self) -> int:
         conn = self._require_conn()
@@ -135,6 +139,25 @@ class SessionStore:
             )
             """
         )
+
+    async def _migration_v4(self) -> None:
+        conn = self._require_conn()
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS project_session_resets (
+                user_id INTEGER NOT NULL,
+                project_path TEXT NOT NULL,
+                reset_at_unix REAL NOT NULL,
+                PRIMARY KEY (user_id, project_path)
+            )
+            """
+        )
+        await conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_project_session_resets_reset_at
+            ON project_session_resets(reset_at_unix)
+            """
+        )
         await conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_project_preferences_updated_at
@@ -172,6 +195,10 @@ class SessionStore:
                 last_error=excluded.last_error
             """,
             (user_id, project_path, thread_id, last_status, last_error),
+        )
+        await conn.execute(
+            "DELETE FROM project_session_resets WHERE user_id = ? AND project_path = ?",
+            (user_id, project_path),
         )
         await conn.commit()
 
@@ -226,7 +253,31 @@ class SessionStore:
             "DELETE FROM project_sessions WHERE user_id = ? AND project_path = ?",
             (user_id, project_path),
         )
+        await conn.execute(
+            """
+            INSERT INTO project_session_resets (user_id, project_path, reset_at_unix)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id, project_path)
+            DO UPDATE SET reset_at_unix=excluded.reset_at_unix
+            """,
+            (user_id, project_path, time.time()),
+        )
         await conn.commit()
+
+    async def get_session_reset_at_unix(self, user_id: int, project_path: str) -> Optional[float]:
+        conn = self._require_conn()
+        cursor = await conn.execute(
+            """
+            SELECT reset_at_unix
+            FROM project_session_resets
+            WHERE user_id = ? AND project_path = ?
+            """,
+            (user_id, project_path),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        return float(row["reset_at_unix"])
 
     async def set_project_launch_mode(
         self,

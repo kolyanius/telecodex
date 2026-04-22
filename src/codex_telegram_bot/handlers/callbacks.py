@@ -72,6 +72,21 @@ class CallbackHandlers:
             await self.navigation.show_repo_picker(update, context, request_context, edit=True)
             return
 
+        if data in {"session:list", "session:refresh"}:
+            await query.answer("Сессии")
+            await self.navigation.show_sessions(update, context, request_context, edit=True)
+            return
+
+        if data.startswith("session:select:"):
+            session_id = data.split(":", 2)[2]
+            await self.navigation.select_session_from_callback(
+                update,
+                context,
+                request_context,
+                session_id,
+            )
+            return
+
         if data == "action:new":
             project = await self.navigation.projects.resolve_current_project(
                 context,

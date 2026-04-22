@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,7 +10,13 @@ import pytest
 from codex_telegram_bot import main as main_module
 from codex_telegram_bot.bot import CodexTelegramBot
 from codex_telegram_bot.config import Settings
-from codex_telegram_bot.models import CodexLaunchMode, CodexResponse, CodexResultStatus, RequestContext
+from codex_telegram_bot.models import (
+    CodexLaunchMode,
+    CodexResponse,
+    CodexResultStatus,
+    LocalCodexSession,
+    RequestContext,
+)
 from codex_telegram_bot.session_store import SessionStore
 
 
@@ -167,13 +174,42 @@ class FakeContext:
 
 
 class FakeCodex:
-    def __init__(self, response: CodexResponse) -> None:
+    def __init__(
+        self,
+        response: CodexResponse,
+        discovered_session_id: str | None = None,
+        local_sessions: list[LocalCodexSession] | None = None,
+    ) -> None:
         self.response = response
+        self.discovered_session_id = discovered_session_id
+        self.local_sessions = local_sessions or []
         self.calls: list[dict] = []
+        self.discovery_calls: list[dict] = []
+        self.local_discovery_calls: list[dict] = []
 
     async def run(self, **kwargs) -> CodexResponse:
         self.calls.append(kwargs)
         return self.response
+
+    def discover_latest_session_id(
+        self,
+        cwd: Path,
+        *,
+        modified_after: float | None = None,
+    ) -> str | None:
+        self.discovery_calls.append({"cwd": cwd, "modified_after": modified_after})
+        return self.discovered_session_id
+
+    def discover_local_sessions(
+        self,
+        cwd: Path,
+        *,
+        limit: int | None = None,
+    ) -> list[LocalCodexSession]:
+        self.local_discovery_calls.append({"cwd": cwd, "limit": limit})
+        if limit is None:
+            return list(self.local_sessions)
+        return list(self.local_sessions[:limit])
 
     def validate_cli_available(self) -> None:
         return None
@@ -191,6 +227,18 @@ class SlowFakeCodex(FakeCodex):
 
 def keyboard_callback_data(markup) -> list[list[str]]:
     return [[button.callback_data for button in row] for row in markup.inline_keyboard]
+
+
+def make_local_session(session_id: str, project_dir: Path, prompt: str = "Old prompt") -> LocalCodexSession:
+    timestamp = datetime(2026, 4, 22, 18, 30)
+    return LocalCodexSession(
+        session_id=session_id,
+        cwd=project_dir,
+        created_at=timestamp,
+        updated_at=timestamp,
+        source_path=project_dir / f"{session_id}.jsonl",
+        first_prompt=prompt,
+    )
 
 
 @pytest.mark.asyncio
@@ -369,8 +417,145 @@ async def test_menu_command_opens_session_card(tmp_path: Path) -> None:
     assert "Режим доступа: `Песочница`" in reply.text
     assert keyboard_callback_data(reply.kwargs["reply_markup"]) == [
         ["nav:repo", "mode:show"],
+        ["session:list"],
         ["action:new"],
     ]
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_sessions_command_lists_project_sessions(tmp_path: Path) -> None:
+    project_dir = tmp_path / "app"
+    project_dir.mkdir()
+    local_session = make_local_session("old-session", project_dir, "Review the API handlers")
+    store = SessionStore(tmp_path / "db.sqlite3")
+    await store.initialize()
+    settings = make_settings(tmp_path)
+    bot = CodexTelegramBot(settings, store)
+    bot.codex = FakeCodex(
+        CodexResponse(final_text="done", thread_id="old-session", status=CodexResultStatus.SUCCESS),
+        local_sessions=[local_session],
+    )
+
+    update = FakeUpdate(user_id=42, text="/sessions")
+    context = FakeContext()
+    context.user_data["current_directory"] = project_dir
+
+    await bot.sessions_command(update, context)
+
+    reply = update.effective_message.replies[-1]
+    assert "Сессии проекта." in reply.text
+    assert "Проект: `app`" in reply.text
+    assert keyboard_callback_data(reply.kwargs["reply_markup"]) == [
+        ["session:select:old-session"],
+        ["session:refresh", "action:new"],
+        ["nav:menu"],
+    ]
+    assert bot.codex.local_discovery_calls[-1] == {"cwd": project_dir, "limit": 10}
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_session_select_callback_saves_thread_and_next_prompt_resumes(tmp_path: Path) -> None:
+    project_dir = tmp_path / "app"
+    project_dir.mkdir()
+    local_session = make_local_session("old-session", project_dir, "Continue this work")
+    store = SessionStore(tmp_path / "db.sqlite3")
+    await store.initialize()
+    settings = make_settings(tmp_path)
+    bot = CodexTelegramBot(settings, store)
+    bot.codex = FakeCodex(
+        CodexResponse(final_text="done", thread_id="old-session", status=CodexResultStatus.SUCCESS),
+        local_sessions=[local_session],
+    )
+
+    context = FakeContext()
+    context.user_data["current_directory"] = project_dir
+    callback_query = FakeCallbackQuery(from_user_id=42, data="session:select:old-session")
+    update = FakeUpdate(user_id=42, callback_query=callback_query)
+
+    await bot.handle_ui_callback(update, context)
+
+    session = await store.get_session(42, str(project_dir))
+    assert session is not None
+    assert session.thread_id == "old-session"
+    assert session.last_status == "selected"
+    assert callback_query.answers[-1] == ("Сессия выбрана", False)
+    assert "Выбрана сессия `old-sess`." in callback_query.edits[-1][0]
+
+    status_update = FakeUpdate(user_id=42, text="/status")
+    await bot.status_command(status_update, context)
+    assert "Thread ID: `old-session`" in status_update.effective_message.replies[-1].text
+
+    text_update = FakeUpdate(user_id=42, text="continue")
+    text_update.effective_message = FakeMessage(text="continue", message_id=2)
+    await bot.handle_text(text_update, context)
+
+    assert bot.codex.calls[-1]["previous_thread_id"] == "old-session"
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_manual_session_select_after_new_session_reset_is_allowed(tmp_path: Path) -> None:
+    project_dir = tmp_path / "app"
+    project_dir.mkdir()
+    local_session = make_local_session("old-session", project_dir, "Return to previous thread")
+    store = SessionStore(tmp_path / "db.sqlite3")
+    await store.initialize()
+    await store.upsert_session(42, str(project_dir), "old-session", last_status="success")
+    settings = make_settings(tmp_path)
+    bot = CodexTelegramBot(settings, store)
+    bot.codex = FakeCodex(
+        CodexResponse(final_text="done", thread_id="fresh-session", status=CodexResultStatus.SUCCESS),
+        local_sessions=[local_session],
+    )
+
+    context = FakeContext()
+    context.user_data["current_directory"] = project_dir
+    new_update = FakeUpdate(user_id=42, text="/new")
+    await bot.new_command(new_update, context)
+
+    text_update = FakeUpdate(user_id=42, text="start fresh")
+    await bot.handle_text(text_update, context)
+    assert bot.codex.calls[-1]["previous_thread_id"] is None
+    fresh_session = await store.get_session(42, str(project_dir))
+    assert fresh_session is not None
+    assert fresh_session.thread_id == "fresh-session"
+
+    callback_query = FakeCallbackQuery(from_user_id=42, data="session:select:old-session")
+    select_update = FakeUpdate(user_id=42, callback_query=callback_query)
+    await bot.handle_ui_callback(select_update, context)
+
+    selected = await store.get_session(42, str(project_dir))
+    assert selected is not None
+    assert selected.thread_id == "old-session"
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_session_select_callback_rejects_active_run(tmp_path: Path) -> None:
+    project_dir = tmp_path / "app"
+    project_dir.mkdir()
+    local_session = make_local_session("old-session", project_dir)
+    store = SessionStore(tmp_path / "db.sqlite3")
+    await store.initialize()
+    settings = make_settings(tmp_path)
+    bot = CodexTelegramBot(settings, store)
+    bot.codex = FakeCodex(
+        CodexResponse(final_text="done", thread_id="old-session", status=CodexResultStatus.SUCCESS),
+        local_sessions=[local_session],
+    )
+
+    context = FakeContext()
+    context.user_data["current_directory"] = project_dir
+    bot.active_interrupts[42] = asyncio.Event()
+    callback_query = FakeCallbackQuery(from_user_id=42, data="session:select:old-session")
+    update = FakeUpdate(user_id=42, callback_query=callback_query)
+
+    await bot.handle_ui_callback(update, context)
+
+    assert callback_query.answers[-1] == ("Дождись завершения текущего запуска.", True)
+    assert await store.get_session(42, str(project_dir)) is None
     await store.close()
 
 
@@ -599,6 +784,63 @@ async def test_handle_text_writes_request_started_and_finished(
     assert update.effective_message.replies[1].text == "Working... 0s"
     assert update.effective_message.replies[-1].kwargs["parse_mode"] == "HTML"
     assert "reply_markup" not in update.effective_message.replies[-1].kwargs or update.effective_message.replies[-1].kwargs["reply_markup"] is None
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_handle_text_discovers_existing_codex_session_when_store_is_empty(
+    tmp_path: Path,
+) -> None:
+    project_dir = tmp_path / "app"
+    project_dir.mkdir()
+    store = SessionStore(tmp_path / "db.sqlite3")
+    await store.initialize()
+    settings = make_settings(tmp_path)
+    bot = CodexTelegramBot(settings, store)
+    bot.codex = FakeCodex(
+        CodexResponse(final_text="done", thread_id="existing-session", status=CodexResultStatus.SUCCESS),
+        discovered_session_id="existing-session",
+    )
+
+    update = FakeUpdate(user_id=42, text="continue")
+    context = FakeContext()
+    context.user_data["current_directory"] = project_dir
+    await bot.handle_text(update, context)
+
+    assert bot.codex.calls[0]["previous_thread_id"] == "existing-session"
+    session = await store.get_session(42, str(project_dir))
+    assert session is not None
+    assert session.thread_id == "existing-session"
+    events = [row[0] for row in await store.conn.execute_fetchall("SELECT event_type FROM audit_log")]
+    assert "session_discovered" in events
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_handle_text_does_not_resume_discovered_session_after_new_session_reset(
+    tmp_path: Path,
+) -> None:
+    project_dir = tmp_path / "app"
+    project_dir.mkdir()
+    store = SessionStore(tmp_path / "db.sqlite3")
+    await store.initialize()
+    await store.clear_session(42, str(project_dir))
+    settings = make_settings(tmp_path)
+    bot = CodexTelegramBot(settings, store)
+    bot.codex = FakeCodex(
+        CodexResponse(final_text="done", thread_id="fresh-session", status=CodexResultStatus.SUCCESS)
+    )
+
+    update = FakeUpdate(user_id=42, text="start fresh")
+    context = FakeContext()
+    context.user_data["current_directory"] = project_dir
+    await bot.handle_text(update, context)
+
+    assert bot.codex.discovery_calls[0]["modified_after"] is not None
+    assert bot.codex.calls[0]["previous_thread_id"] is None
+    session = await store.get_session(42, str(project_dir))
+    assert session is not None
+    assert session.thread_id == "fresh-session"
     await store.close()
 
 

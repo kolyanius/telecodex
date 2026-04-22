@@ -230,7 +230,11 @@ class PromptExecutionFlow:
                 parse_mode="Markdown",
             )
 
-        previous_thread_id = await self.session_store.get_thread_id(user_id, str(cwd))
+        previous_thread_id = await self.resolve_previous_thread_id(
+            user_id=user_id,
+            cwd=cwd,
+            request_context=request_context,
+        )
         request_context.has_previous_thread = bool(previous_thread_id)
 
         await self.observability.record_event(
@@ -483,6 +487,41 @@ class PromptExecutionFlow:
                 last_status=str(response.status),
                 last_error=response.error_message,
             )
+
+    async def resolve_previous_thread_id(
+        self,
+        *,
+        user_id: int,
+        cwd: Path,
+        request_context,
+    ) -> Optional[str]:
+        stored_thread_id = await self.session_store.get_thread_id(user_id, str(cwd))
+        if stored_thread_id:
+            return stored_thread_id
+
+        reset_at_unix = await self.session_store.get_session_reset_at_unix(user_id, str(cwd))
+        discovered_thread_id = await asyncio.to_thread(
+            self.codex.discover_latest_session_id,
+            cwd,
+            modified_after=reset_at_unix,
+        )
+        if not discovered_thread_id:
+            return None
+
+        await self.session_store.upsert_session(
+            user_id,
+            str(cwd),
+            discovered_thread_id,
+            last_status="discovered",
+        )
+        await self.observability.record_event(
+            "codex_session_discovered",
+            request_context,
+            audit_event="session_discovered",
+            event_status="discovered",
+            thread_id=discovered_thread_id,
+        )
+        return discovered_thread_id
 
     async def stop_callback(self, update: Update, request_context) -> None:
         query = update.callback_query

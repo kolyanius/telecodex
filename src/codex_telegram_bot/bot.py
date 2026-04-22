@@ -122,6 +122,7 @@ class CodexTelegramBot:
         app.add_handler(CommandHandler("controls", self.menu_command))
         app.add_handler(CommandHandler("new", self.new_command))
         app.add_handler(CommandHandler("status", self.status_command))
+        app.add_handler(CommandHandler("sessions", self.sessions_command))
         app.add_handler(CommandHandler("verbose", self.verbose_command))
         app.add_handler(CommandHandler("repo", self.repo_command))
         app.add_handler(CommandHandler("mode", self.mode_command))
@@ -129,7 +130,7 @@ class CodexTelegramBot:
         app.add_handler(
             CallbackQueryHandler(
                 self.handle_ui_callback,
-                pattern=r"^(?:nav:|action:(?:new|create_project)$|verbose:|repo:|mode:)",
+                pattern=r"^(?:nav:|action:(?:new|create_project)$|verbose:|repo:|mode:|session:)",
             )
         )
         app.add_handler(MessageHandler(filters.VOICE, self.handle_voice))
@@ -150,6 +151,7 @@ class CodexTelegramBot:
                 BotCommand("menu", "Открыть текущее меню сессии"),
                 BotCommand("repo", "Выбрать или создать проект"),
                 BotCommand("mode", "Изменить режим доступа"),
+                BotCommand("sessions", "Выбрать старую сессию Codex"),
                 BotCommand("new", "Начать новую сессию Codex"),
                 BotCommand("status", "Показать технический статус"),
             ]
@@ -171,6 +173,9 @@ class CodexTelegramBot:
 
     async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await self.command_handlers.status_command(update, context)
+
+    async def sessions_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        await self.command_handlers.sessions_command(update, context)
 
     async def verbose_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await self.command_handlers.verbose_command(update, context)
